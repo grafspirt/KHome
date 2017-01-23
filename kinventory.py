@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 
 import json
-import time
+from time import time
 from threading import Lock
 from threading import Timer
 import log
 import pymysql
 
+# Interface signature
 KHOME_AGENT_INTERFACE = {
     'ver': '1',
     'commands': ['get', 'ping', 'clean', 'gpio', 'brdg'],
@@ -17,13 +18,23 @@ KHOME_AGENT_INTERFACE = {
     'map': ['in', 'out']
 }
 
-# Other
-NO_SRC_KEY = '~'
-SYSTEM_KEY = '#'
-ALL_MODULES = '~'
+# Modules from the following list are allowed for processing
+KHOME_MODULE_TYPES = {
+    # Sensors
+    '1': "Generic Sensor",
+    '2': "IR Sensor",
+    '3': "DHT Sensor",
+    # Actuators
+    '51': "Switch"
+}
 
-# Storage
-storage_client = None
+# Available pins
+PINS_ESP8266 = ['0', '1', '3', '2', '4', '5', '9', '10', '12', '13', '14', '15', '16']
+
+# Other
+BOXKEY_NOSRC = '~'
+BOXKEY_SYSTEM = '#'
+ALL_MODULES = '~'
 
 
 # Base classes
@@ -62,7 +73,7 @@ class BaseObject(object):
             return cfg
 
 
-class KAgentObject(BaseObject):
+class AgentObject(BaseObject):
     """ Prototype of an Agent in the structure. Id is stored in Configuration. """
     def __init__(self, cfg):
         super().__init__(cfg)
@@ -79,7 +90,7 @@ class KAgentObject(BaseObject):
         return cfg['id']
 
 
-class KDBObject(BaseObject):
+class DBObject(BaseObject):
     """ Prototype of an object stored in DB. """
     def __init__(self, cfg, oid: str):
         super().__init__(cfg)
@@ -106,9 +117,9 @@ class KDBObject(BaseObject):
         pass
 
 
-# Agents - Nodes and other subjects of KHome net
+# Agents - Nodes, Modules and attendant entities
 
-class Module(KAgentObject):
+class Module(AgentObject):
     def __init__(self, cfg, nid):
         """
         :param cfg: Config string/object describing the Module
@@ -135,7 +146,7 @@ class Module(KAgentObject):
 
     def get_box_key(self) -> str:
         """ Get Key of data source - this Module itself. """
-        return form_key(self.nid, self.id)
+        return Box.box_key(self.nid, self.id)
 
 
 class ModuleError(Exception):
@@ -147,7 +158,7 @@ class ModuleError(Exception):
         return "There is no [%s]%s module in inventory" % (self.nid, self.mal)
 
 
-class Bridge(KAgentObject):
+class Bridge(AgentObject):
     pass
 
 
@@ -162,8 +173,12 @@ class Box(object):
         self.name = name
         self.value = ''
 
+    @staticmethod
+    def box_key(nid: str, mal: str = '') -> str:
+        return nid + ('/' + mal if mal else '')
 
-class Node(KAgentObject):
+
+class Node(AgentObject):
     def __init__(self, cfg):
         super().__init__(cfg)
         self.type = 'esp8266'                       # Node hardware type
@@ -176,7 +191,7 @@ class Node(KAgentObject):
         self.is_alive = is_alive
         self.config['alive'] = is_alive
         if is_alive:
-            self.config['LTA'] = time.time()    # LTA - Last Time Alive
+            self.config['LTA'] = time()  # LTA - Last Time Alive
 
     def add_module(self, module_cfg: dict):
         # Check Module unique in Node
@@ -298,7 +313,7 @@ class NodeSession(object):
 
 # Actors - Units processing data came from Agents
 
-class Actor(KDBObject):
+class Actor(DBObject):
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)
         self.active = bool(self.config['active']) if 'active' in self.config else True
@@ -376,16 +391,17 @@ class Handler(Actor):
     def get_box_key(self) -> str:
         """ Get Key of data source (Module) started actor chain. """
         data = self.config['data']
+        data_src = data['src']
         if 'src_mdl' in data:
-            return form_key(data['src'], data['src_mdl'])
-        else:
-            try:
-                return inv.actors[data['src']].get_box_key()
-            except KeyError:
-                return NO_SRC_KEY
+            # source - Module
+            return Box.box_key(data_src, data['src_mdl'])
+        elif data_src in inv.actors:
+            # source - another Actor
+            return inv.actors[data_src].get_box_key()
+        return BOXKEY_NOSRC     # maybe this source has not been loaded yet (see correct_box_key())
 
     def get_handler_key(self):
-        return form_key(
+        return Box.box_key(
             self.config['data']['src'],
             self.config['data']['src_mdl'] if 'src_mdl' in self.config['data'] else '')
 
@@ -395,10 +411,10 @@ class Generator(Actor):
     Actor data source is a system.
     """
     def get_box_key(self):
-        return SYSTEM_KEY
+        return BOXKEY_SYSTEM
 
 
-# Inventory - Carry data objects
+# Storage
 
 def storage_init(server_address):
     global storage_client
@@ -407,9 +423,39 @@ def storage_init(server_address):
     storage_client = pymysql.connect(host=server_address, user='khome', passwd='khome', db='khome')
 
 
-def form_key(nid: str, mal='') -> str:
-    return nid + ('/' + mal if mal else '')
+def store_module(module: Module) -> bool:
+    if storage_client:
+        cursor = storage_client.cursor()
+        cursor.execute("INSERT INTO modules (nid, mal, name) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE name=%s",
+                       (module.nid, module.id, module.config['name'], module.config['name']))
+        storage_client.commit()
+        cursor.close()
+        return True
+    return False
 
+
+def forget_module(module: Module):
+    if storage_client:
+        cursor = storage_client.cursor()
+        cursor.execute("DELETE FROM modules WHERE nid=%s AND mal=%s", (module.nid, module.id))
+        storage_client.commit()
+        cursor.close()
+
+
+def load_actors() -> dict:
+    if storage_client:
+        cursor = storage_client.cursor()
+        cursor.execute("SELECT id, config FROM actors ORDER BY id")
+        result = {row[0]: row[1] for row in cursor}
+        cursor.close()
+        return result
+    else:
+        return {}
+
+storage_client = None
+
+
+# Inventory - Carry data objects
 
 class Inventory(object):
     def __init__(self):
@@ -427,15 +473,6 @@ class Inventory(object):
     def changed(self):
         """ Mark that some changes in inventory have been made. """
         self.revision += 1
-
-    @staticmethod
-    def load_actors():
-        if storage_client:
-            cursor = storage_client.cursor()
-            cursor.execute("SELECT id, config FROM actors ORDER BY id")
-            result = {row[0]: row[1] for row in cursor}
-            cursor.close()
-            return result
 
     def register_node(self, node_cfg):
         """
@@ -493,34 +530,15 @@ class Inventory(object):
     def wipe_module(self, node: Node, mal: str) -> bool:
         try:
             module = node.modules[mal]
-            self.forget_module(module)
+            forget_module(module)
             if node.del_module(mal):
                 self.changed()
                 # remove Module Box from Manager Box list
-                self.wipe_boxes_by_key(form_key(node.id, mal))
+                self.wipe_boxes_by_key(Box.box_key(node.id, mal))
                 return True
         except KeyError:
             pass
         return False
-
-    @staticmethod
-    def store_module(module: Module) -> bool:
-        if storage_client:
-            cursor = storage_client.cursor()
-            cursor.execute("INSERT INTO modules (nid, mal, name) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE name=%s",
-                           (module.nid, module.id, module.config['name'], module.config['name']))
-            storage_client.commit()
-            cursor.close()
-            return True
-        return False
-
-    @staticmethod
-    def forget_module(module: Module):
-        if storage_client:
-            cursor = storage_client.cursor()
-            cursor.execute("DELETE FROM modules WHERE nid=%s AND mal=%s", (module.nid, module.id))
-            storage_client.commit()
-            cursor.close()
 
     def register_handler(self, handler):
         """
@@ -562,17 +580,17 @@ class Inventory(object):
     def correct_box_key(self):
         """
         If the Box is hosted under Actor which source is another Actor which has not been loaded yet
-        then this Box would be tied to NO_SRC_KEY.
+        then this Box would be tied to BOXKEY_NOSRC.
         After all Actors are loaded the system tries to re-assign all such Boxed to correct keys.
         """
         try:
             # Try to find sources to the "pending" Handlers
-            boxes_wo_src = self.boxes[NO_SRC_KEY].copy()
-            self.boxes[NO_SRC_KEY] = []
+            boxes_wo_src = self.boxes[BOXKEY_NOSRC].copy()
+            self.boxes[BOXKEY_NOSRC] = []
             for box in boxes_wo_src:
                 self.register_box(box)
             # Wipe Handlers without a source from Inventory
-            for actor in [box.owner for box in self.boxes[NO_SRC_KEY]]:
+            for actor in [box.owner for box in self.boxes[BOXKEY_NOSRC]]:
                 log.warning(
                     'Actor %s#%s is to be deleted as no source was found for it.' %
                     (actor.config['type'].lower(), actor.id))

@@ -1,36 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-# TODO: if only one module could not be installed the the whole package - nack?
-
 from pymysql import DatabaseError
-import datetime
 from urllib.parse import urlencode
-import http.client as client
-import re
-import kbus
+import http.client as http_client
+import bus
 from kinventory import *
+from scheduler import *
 
 
-# Modules from the following list are allowed for processing
-KHOME_MODULE_TYPES = {
-    # Sensors
-    '1': "Generic Sensor",
-    '2': "IR Sensor",
-    '3': "DHT Sensor",
-    # Actuators
-    '51': "Switch"
-}
-
-# Available pins
-PINS_ESP8266 = ['0', '1', '3', '2', '4', '5', '9', '10', '12', '13', '14', '15', '16']
-
-
-# Actors
+# Actors and Jobs
 
 class ActorWithMapping(Handler):
     """ Actor using mapping data in config. """
-    class MapUnit(KDBObject):
+    class MapUnit(DBObject):
         """ Object used as mapping record in ActorWithMapping configuration. """
         def __init__(self, cfg):
             super().__init__(cfg, cfg['in'])
@@ -94,7 +77,6 @@ class ActorLog(Handler):
     Actor logging source data with a period defined in ticks.
     The logging action [self.log(sig)] is defined in child classes.
     """
-
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)
         # period
@@ -125,15 +107,16 @@ class ActorLog(Handler):
 
 
 class Resend(ActorWithMapping):
+    """ Resending source data to another Module. """
     def process_signal(self, sig):
-        # direct
+        # as-is from 1 to 1
         try:
             send_signal_to_module(
                 inv.nodes[self.config['data']['trg']].modules[self.config['data']['trg_mdl']],
                 sig)
         except KeyError:
             pass
-        # mapping
+        # mapping from 1 to N
         for map_key in self.mapping:
             map_unit = self.mapping[map_key]
             if map_unit['in'] == sig:
@@ -146,7 +129,7 @@ class Resend(ActorWithMapping):
 
 
 class LogThingSpeak(ActorWithMapping, ActorLog):
-    """ Log source data in ThingSpeak.com using mapping for complex signal. """
+    """ Log source data to ThingSpeak.com using mapping for complex signal. """
     def __new__(cls, cfg, db_id):
         if 'key' in cfg['data']:
             return super().__new__(cls, cfg, db_id)
@@ -165,10 +148,10 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
                 except KeyError:
                     pass
         else:
-            data_to_send['field1'] = sig
+            data_to_send['field1'] = sig    # default field
 
         # send
-        connection = client.HTTPConnection("api.thingspeak.com:80")
+        connection = http_client.HTTPConnection("api.thingspeak.com:80")
         connection.request(
             "POST",
             "/update",
@@ -178,10 +161,9 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
 
 
 class LogDB(ActorLog):
-    """ Log source data in DB. """
-
+    """ Log source data to DB. """
     def log(self, sig):
-        if inv.storage:
+        if storage_client:
             if isinstance(sig, dict):
                 str_value = ""
                 for key in sorted(sig):
@@ -192,12 +174,12 @@ class LogDB(ActorLog):
             else:
                 str_value = '{"unknown-value-type":}'
 
-            cursor = inv.storage.cursor()
+            cursor = storage_client.cursor()
             cursor.execute(
                 "INSERT INTO sens_data (sensor, value) VALUES (%s, %s)",
                 (self.get_box_key(), str_value)
             )
-            inv.storage.commit()
+            storage_client.commit()
             cursor.close()
 
 
@@ -258,177 +240,6 @@ class Average(Handler):
             count += super().process_request(command, params)
 
         return count
-
-
-class ScheduleTime(object):
-    """
-    Replicates Actor time templates.
-    String source: [[[YYYY:]MM:]DD:]hh:]mm[.ss]
-    """
-    def __init__(self, time_obj):
-        self.is_template = False
-
-        if isinstance(time_obj, str):
-            class Parser(object):
-                def __init__(self, time_str):
-                    self.time_str = time_str
-                    self.pos_end = len(time_str)
-
-                def get(self, delimiter) -> int:
-                    if self.pos_end >= 0:
-                        pos = self.time_str.rfind(delimiter, 0, self.pos_end)
-                        try:
-                            result = int(self.time_str[pos + 1:self.pos_end])
-                        except ValueError:
-                            result = -1
-                        self.pos_end = pos
-                        return result
-                    else:
-                        return -1
-
-            if '.' not in time_obj:
-                time_obj += '.0'
-            tp = Parser(time_obj)
-
-            self.second = tp.get('.')
-            self.minute = tp.get(':')
-            self.hour = tp.get(':')
-            self.day = tp.get(':')
-            self.month = tp.get(':')
-            self.year = tp.get(':')
-            self.is_template = self.year == -1
-
-        elif isinstance(time_obj, datetime.datetime):
-            self.second = time_obj.second
-            self.minute = time_obj.minute
-            self.hour = time_obj.hour
-            self.day = time_obj.day
-            self.month = time_obj.month
-            self.year = time_obj.year
-            self.is_template = True
-
-    @staticmethod
-    def _nvl(value, null_value):
-        return value if value > -1 else null_value
-
-    def __str__(self):
-        return '%s:%s:%s:%s:%s.%s' %\
-               (self.year if self.year > -1 else '****',
-                '%02d' % self.month if self.month > -1 else '**',
-                '%02d' % self.day if self.day > -1 else '**',
-                '%02d' % self.hour if self.hour > -1 else '**',
-                '%02d' % self.minute if self.minute > -1 else '**',
-                '%02d' % self.second)
-
-    def _cmp(self, other) -> int:
-        def _cmp(x1, x2):
-            if x1 != -1 and x2 != -1:
-                if x1 > x2:
-                    return 1
-                if x1 < x2:
-                    return -1
-            return 0
-
-        res = _cmp(self.year, other.year)
-        if res:
-            return res
-
-        res = _cmp(self.month, other.month)
-        if res:
-            return res
-
-        res = _cmp(self.day, other.day)
-        if res:
-            return res
-
-        res = _cmp(self.hour, other.hour)
-        if res:
-            return res
-
-        res = _cmp(self.minute, other.minute)
-        if res:
-            return res
-
-        return _cmp(self.second, other.second)
-
-    def __lt__(self, other):
-        return self._cmp(other) == -1
-
-    def __gt__(self, other):
-        return self._cmp(other) == 1
-
-    def __eq__(self, other):
-        return self._cmp(other) == 0
-
-    def get_datetime(self, shift=0, start_date=None) -> datetime.datetime:
-        if not start_date:
-            start_date = datetime.datetime.now()
-
-        if not shift:
-            return datetime.datetime(
-                self._nvl(self.year, start_date.year),
-                self._nvl(self.month, start_date.month),
-                self._nvl(self.day, start_date.day),
-                self._nvl(self.hour, start_date.hour),
-                self._nvl(self.minute, start_date.minute),
-                self.second)
-        else:
-            shift_year = 0
-            shift_month = 0
-            shift_day = 0
-            shift_hour = 0
-            shift_minute = 0
-            if self.year == -1:
-                if self.month == -1:
-                    if self.day == -1:
-                        if self.hour == -1:
-                            if self.minute == -1:
-                                if self.second == -1:
-                                    shift_minute = shift
-                            else:
-                                shift_hour = shift
-                        else:
-                            shift_day = shift
-                    else:
-                        shift_month = shift
-                else:
-                    shift_year = shift
-
-            date_shifted_by_day = start_date + datetime.timedelta(shift_day, 0, 0, 0, shift_minute, shift_hour)
-            if date_shifted_by_day.month + shift_month > 12:
-                shift_year += 1
-                shift_month -= 12
-
-            return datetime.datetime(
-                self._nvl(self.year, date_shifted_by_day.year + shift_year),
-                self._nvl(self.month, date_shifted_by_day.month + shift_month),
-                self._nvl(self.day, date_shifted_by_day.day),
-                self._nvl(self.hour, date_shifted_by_day.hour),
-                self._nvl(self.minute, date_shifted_by_day.minute),
-                self.second)
-
-    def get_timedelta(self) -> datetime.timedelta:
-        return datetime.timedelta(
-            self._nvl(self.day, 0),
-            self._nvl(self.second, 0),
-            0, 0,
-            self._nvl(self.minute, 0),
-            self._nvl(self.hour, 0))
-
-
-class Job(object):
-    """ Job unit which could be scheduled at a start_time to be handled by Actors tied to handler. """
-    def __init__(self, handler):
-        self.start_time = None  # the time which the Job shall be scheduled at
-        self.handler = handler  # Handler (Actor) which is to be a source of the values generated by this Job
-
-    def schedule(self):
-        """ Schedule this job. """
-        if self.start_time:
-            sch.add_job(self)
-
-    def process(self):
-        pass
 
 
 class EventJob(Job):
@@ -508,94 +319,11 @@ class Schedule(Generator):
                 pass  # not valid config - do not load
 
 
-# Scheduler - Manage job objects
-
-class Scheduler(object):
-    def __init__(self):
-        self.timetable = {}             # scheduled jobs list. Structure: [time_minutes] -> list of time_seconds
-        self.jobs_to_schedule = []      # list of jobs to be rescheduled
-        self.clean_timetable = False    # flag defining the necessity of timetable cleaning from obsolete jobs
-
-    @staticmethod
-    def init_timer():
-        """ Init the timer which is used by Scheduler. """
-        Scheduler.on_timer()
-
-    @staticmethod
-    def on_timer():
-        now = time.localtime()
-        Timer(60 - now.tm_sec, Scheduler.on_timer).start()
-        sch.process('%d:%02d:%02d:%02d:%02d' %
-                    (now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min),
-                    now.tm_sec)
-
-    def add_job(self, job: Job) -> str:
-        # calc key
-        time_key = ''
-        dt_object = job.start_time
-        if dt_object.minute > -1:
-            time_key = '%02d' % dt_object.minute + time_key
-        if dt_object.hour > -1:
-            time_key = '%02d' % dt_object.hour + ':' + time_key
-        if dt_object.day > -1:
-            time_key = '%02d' % dt_object.day + ':' + time_key
-        if dt_object.month > -1:
-            time_key = '%02d' % dt_object.month + ':' + time_key
-        if dt_object.year > -1:
-            time_key = str(dt_object.year) + ':' + time_key
-        # register job to yhe key
-        try:
-            self.timetable[time_key].append(job)
-        except KeyError:
-            self.timetable[time_key] = [job]
-        return time_key
-
-    def clean(self):
-        now = datetime.datetime.now()
-        to_delete = []
-        # collect obsolete jobs to be deleted
-        for time_key in self.timetable:
-            value = ScheduleTime(time_key)
-            if not value.is_template and not value > now:
-                to_delete.append(time_key)
-        # delete obsolete jobs found
-        for time_key in to_delete:
-            del self.timetable[time_key]
-
-    def process(self, time_now: str, correction_sec: int = 0):
-        """
-        :param time_now: time to the nearest minute
-        :param correction_sec: difference in seconds if the processing is started not in :00
-        :return: nothing
-        """
-        # Check all jobs scheduled - find jobs with time_key related to the time_now
-        for time_key in self.timetable:
-            if re.search(time_key + '$', time_now):
-                # It is time to do all jobs related to this time key
-                for job in self.timetable[time_key]:
-                    if job.start_time.second:
-                        # wait for item.seconds
-                        Timer(job.start_time.second - correction_sec, job.process).start()
-                    else:
-                        # process value right now
-                        job.process()
-        # Clean jobs list (clean_timetable)
-        if self.clean_timetable:
-            self.clean()
-            self.clean_timetable = False
-        # Reschedule jobs (jobs_to_schedule)
-        for job in self.jobs_to_schedule:
-            job.schedule()
-        self.jobs_to_schedule = []
-
-sch = Scheduler()
-
-
 # Bus ISR ---
 
 def on_connect_to_bus():
     # Ask all Agents for configs
-    kbus.send(
+    bus.send(
         "/config/" + ALL_MODULES,
         "i!",
         True)
@@ -609,16 +337,16 @@ def on_message_from_bus(topic, message):
         # South - data from an Agent
         if coordinates[1] in ('nodes', 'data'):
             # Result
-            if handle_response_from_node(coordinates, message_object):
+            if handle_agent_response(coordinates, message_object):
                 pass
             # Node data
             elif coordinates[1] == 'nodes':     # /nodes/<nid>
-                handle_data_from_node(
+                handle_node_data(
                     coordinates[2],
                     message_object)
             # Module data
             elif coordinates[1] == 'data':      # /data/<nid>/<mal>
-                handle_data_from_module(
+                handle_module_data(
                     coordinates[2],
                     coordinates[3],
                     message_object)
@@ -627,15 +355,15 @@ def on_message_from_bus(topic, message):
             # Process request for the Manager
             process_request(message)
     except KeyError as error_object:
-        kbus.send(
+        bus.send(
             "/error",
             "Key %s is absent in the request: %s" % (str(error_object), message))
     except IndexError:
-        kbus.send(
+        bus.send(
             "/error",
             "Wrong request format in topic [%s]: %s" % (topic, message))
     except ValueError:
-        kbus.send(
+        bus.send(
             "/error",
             "Request is not a JSON in topic [%s]: %s" % (topic, message))
 
@@ -644,7 +372,7 @@ def on_message_from_bus(topic, message):
 
 def send_signal_to_module(module: Module, data, north_request: dict = None):
     return inv.nodes[module.nid].session.start(
-        kbus.send(
+        bus.send(
             '/signal/%s/%s' % (module.nid, module.id),
             data,
             True),
@@ -653,23 +381,23 @@ def send_signal_to_module(module: Module, data, north_request: dict = None):
 
 def send_config_to_node(node: Node, config, north_request: dict = None):
     return node.session.start(
-        kbus.send(
+        bus.send(
             '/config/%s' % node.id,
             config,
             True),
         north_request)
 
 
-def answer_to_www(sid: str, message):
+def answer_north(sid: str, message):
     if sid:
-        kbus.send(
+        bus.send(
             '/manager/%s' % sid,
             message if message else '{"unknown":}')
 
 
 # Handling South ---
 
-def handle_data_from_node(nid: str, mes: dict):
+def handle_node_data(nid: str, mes: dict):
     """
     Handle data from Node.
     :param nid: id of a Node sent data
@@ -694,7 +422,7 @@ def handle_data_from_node(nid: str, mes: dict):
                     pass
 
 
-def handle_data_from_module(nid: str, mal: str, mes: dict):
+def handle_module_data(nid: str, mal: str, mes: dict):
     """
     Handle data from Module.
     :param nid: id of a Node hosting Module sent data
@@ -710,19 +438,19 @@ def handle_data_from_module(nid: str, mal: str, mes: dict):
             module.box.value = mes if 'ack' not in mes else mes['ack']  # TODO: remove when Agent will be updated
             # find/trigger right handler
             handle_value(
-                form_key(nid, mal),
+                module.get_box_key(),
                 module.box.value)
     except KeyError:
         pass
 
 
-def handle_response_from_node(coordinates: list, response: dict) -> bool:
+def handle_agent_response(coordinates: list, response: dict) -> bool:
     try:
         node = inv.nodes[coordinates[2]]    # type: Node
         node.alive()
         if node.session.active:
             node.session.stop(response)
-            if coordinates[1] != 'data':    # data from Module should be processed by handle_data_from_module
+            if coordinates[1] != 'data':    # data from Module should be processed by handle_module_data
                 return True                 # further processing is not necessary
     except (AttributeError, KeyError):
         pass
@@ -759,43 +487,42 @@ def process_request(message):
     # Process request
     try:
         request_type = request['request']
-
+        # Report - Agents structure
         if request_type == 'get-structure':
             answer = request_manage_structure(request)
-
+        # Report - Data
         elif request_type == 'get-data':
             answer = request_manage_data(request)
-
+        # Report - Timetable
         elif request_type == 'get-timetable':
             answer = request_manage_timetable()
-
+        # South - Agent ping
         elif request_type == 'ping':
-            answer = request_manage_ping(request)                       # south
-
+            answer = request_manage_ping(request)
+        # South - Signal sending
         elif request_type == 'signal':
-            answer = request_manage_signal(request)                     # south
-
-        # Update Module configuration
+            answer = request_manage_signal(request)
+        # South - Module configuration
         elif request_type in ['add-module', 'del-module', 'edit-module']:
-            answer = answer_template % request_manage_modules(request)  # south
+            answer = answer_template % request_manage_modules(request)
 
-            # elif request_type in ['add-actor', 'edit-actor', 'del-actor']:
-            #     answer = answer_template % request_manage_actors(request_type, params)
-            #
-            # elif request_type in ['add-mapping', 'del-mapping']:
-            #     try:
-            #         answer = '{"ack": "%d"}' % inv.actors[params['actor']].process_request(request_type, params)
-            #     except KeyError:
-            #         pass
+        # elif request_type in ['add-actor', 'edit-actor', 'del-actor']:
+        #     answer = answer_template % request_manage_actors(request_type, params)
+        #
+        # elif request_type in ['add-mapping', 'del-mapping']:
+        #     try:
+        #         answer = '{"ack": "%d"}' % inv.actors[params['actor']].process_request(request_type, params)
+        #     except KeyError:
+        #         pass
     except (TypeError, ModuleError, NodeError) as err_obj:
         answer = '{"nack": "%s"}' % err_obj
     except KeyError as err_obj:
         answer = '{"nack": "Key %s is absent in the request"}' % err_obj
     except pymysql.err.OperationalError:
         answer = '{"nack": "There are problems in DB"}'
-
-    # Answer with the same session id
-    answer_to_www(sid, answer if answer else {"nack": "timeout"})
+    finally:
+        # Answer with the same session id
+        answer_north(sid, answer if answer else {"nack": "timeout"})
 
 
 def request_manage_structure(request: dict) -> dict:
@@ -1000,13 +727,13 @@ def start(server_address='localhost'):
     # Bus and Scheduler
     try:
         # Bus
-        kbus.init(server_address, on_connect_to_bus, on_message_from_bus)
+        bus.init(server_address, on_connect_to_bus, on_message_from_bus)
         log.info('Connected to Bus.')
         # Scheduler
         sch.init_timer()
         log.info('Scheduler has been started.')
         # Start
-        kbus.listen()
+        bus.listen()
     except ConnectionRefusedError as err:
         log.error('Cannot connected to Bus (%s). KHome server is stopped.' % err)
         log.info('KHome server has not been started.')

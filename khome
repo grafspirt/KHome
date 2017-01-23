@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Start manager directly or as a daemon.
+"""
+
+import manager
+from daemon import Daemon
+import sys
+
+
+class KDaemon(Daemon):
+    def run(self):
+        return manager.start()
+
+    def status(self):
+        if self.get_pid():
+            print("%s is running!" % self.name)
+        else:
+            print("%s is sleeping." % self.name)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 2:
+        daemon = KDaemon("/var/run/KHome.pid", 'KHome server')
+        if sys.argv[1] == 'start':
+            daemon.start()
+        elif sys.argv[1] == 'stop':
+            daemon.stop()
+        elif sys.argv[1] == 'restart':
+            daemon.restart()
+        elif sys.argv[1] == 'status':
+            daemon.status()
+        else:
+            print("Unknown command %s. Please use one of the following: {start|stop|restart|status}" % sys.argv[1])
+            sys.exit(2)
+
+        sys.exit(0)
+    else:
+        # manager.start('192.168.0.13')
+        manager.start('192.168.10.200')

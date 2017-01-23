@@ -42,6 +42,7 @@ def on_message_mqtt(client, userdata, msg: mqtt.MQTTMessage):
     message = msg.payload.decode('utf-8')
     print('[%s] >>[%s]>> %s' % (str(time.ctime()), msg.topic, message))
     # Processing in a separate thread
+    message = prepare_module_message(message)
     process_message = Thread(target=__on_message_handler, args=(msg.topic, message))
     process_message.start()
 
@@ -62,3 +63,16 @@ def send(topic: str, message, to_esp8266=False) -> str:
         __mqtt_broker.publish(topic, to_send)
 
     return to_send
+
+
+def prepare_module_message(message: str) -> str:
+    if message.find('"') >= 0:
+        return message
+
+    message = message.replace('{', '{"')
+    message = message.replace('}', '"}')
+    message = message.replace(':', '":"')
+    message = message.replace(',', '","')
+    message = message.replace('"[', '[')
+    message = message.replace(']"', ']')
+    return message.replace('}","{', '},{')

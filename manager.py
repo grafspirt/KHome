@@ -603,7 +603,6 @@ def on_connect_to_bus():
 
 def on_message_from_bus(topic, message):
     coordinates = topic.split('/')
-    message = prepare_module_message(message)
     try:
         # Message -> Object
         message_object = json.loads(message)

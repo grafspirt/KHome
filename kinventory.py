@@ -2,7 +2,6 @@
 # -*- coding: utf-8 -*-
 
 import json
-from helpers import *
 import time
 from threading import Lock
 from threading import Timer
@@ -406,6 +405,10 @@ def storage_init(server_address):
     if storage_client:
         storage_client.close()
     storage_client = pymysql.connect(host=server_address, user='khome', passwd='khome', db='khome')
+
+
+def form_key(nid: str, mal='') -> str:
+    return nid + ('/' + mal if mal else '')
 
 
 class Inventory(object):

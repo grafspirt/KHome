@@ -12,24 +12,37 @@ import pymysql
 KHOME_AGENT_INTERFACE = {
     'ver': '1',
     'commands': ['get', 'ping', 'clean', 'gpio', 'brdg'],
-    'get': ['gpio'],
-    'gpio': ['p', 't', 'a'],
+    'get': ['gpio', 'brdg', 'data'],
+    'gpio': ['p', 't', 'a', 'prd'],
     'brdg': ['ond', 'ols', 'map'],
-    'map': ['in', 'out']
+    'map': ['in', 'out'],
+    'error_codes': {
+        '1': "Agent does not have such Module",
+        '2': "Target Module is not Actuator",
+        '3': "Unknown signal",
+        '10': "Wrong message format - not JSON",
+        '11': "Wrong GPIO configuration",
+        '12': "Modules maximum is reached",
+        '100': "GPIO storage failure",
+        '101': "Bridge storage failure"
+    }
 }
 
 # Modules from the following list are allowed for processing
 KHOME_MODULE_TYPES = {
     # Sensors
-    '1': "Generic Sensor",
-    '2': "IR Sensor",
-    '3': "DHT Sensor",
+    '1': "Generic Sensor Timer",
+    '2': "Generic Trigger Sensor",
+    '3': "IR Sensor",
+    '4': "DHT Sensor",
+    '5': "Obstacle Sensor",
+    '6': "PIR Sensor",
     # Actuators
     '51': "Switch"
 }
 
 # Available pins
-PINS_ESP8266 = ['0', '1', '3', '2', '4', '5', '9', '10', '12', '13', '14', '15', '16']
+PINS_ESP8266 = ['0', '2', '4', '5', '9', '10', '12', '13', '14', '15', '16']
 
 # Other
 BOXKEY_NOSRC = '~'
@@ -132,13 +145,12 @@ class Module(AgentObject):
         self.box = Box(self, self.config['a'])
         # Load/init module name
         if 'name' not in self.config:
-            name = self.id
+            self.config['name'] = self.id
             if storage_client:
-                cursor = storage_client.cursor()
+                cursor = storage_start()
                 if cursor.execute("SELECT name FROM modules WHERE nid=%s AND mal=%s", (self.nid, self.id)):
-                    name = cursor.fetchall()[0][0]
-                cursor.close()
-            self.config['name'] = name
+                    self.config['name'] = cursor.fetchall()[0][0]
+                storage_stop(cursor)
 
     @staticmethod
     def extract_id(cfg) -> str:
@@ -194,13 +206,13 @@ class Node(AgentObject):
             self.config['LTA'] = time()  # LTA - Last Time Alive
 
     def add_module(self, module_cfg: dict):
-        # Check Module unique in Node
         new_module = Module(module_cfg, self.id)
         if new_module.id not in self.modules:
-            # add to to internal inventory
+            # Module does not exist in internal Inventory so add it and return result object
             self.modules[new_module.id] = new_module
             return new_module
         else:
+            # Module exists in internal Inventory so return nothing
             return None
 
     def del_module(self, mal: str) -> bool:
@@ -236,7 +248,10 @@ class Node(AgentObject):
             for src_cfg_unit in cfg_entity_or_list:
                 trg_cfg_unit = {}
                 for tag in list(tags_allowed):
-                    trg_cfg_unit[tag] = src_cfg_unit[tag]
+                    try:
+                        trg_cfg_unit[tag] = src_cfg_unit[tag]
+                    except KeyError:
+                        pass
                 alias_result.append(trg_cfg_unit)
         else:
             alias_result = '???'    # TODO: finish this idea
@@ -256,7 +271,7 @@ class NodeSession(object):
         self.node = node            # parent
         self.active = False
         self.request = None
-        self.response = {}
+        self.response = None
         # north
         self.request_north = None
         self.id = ''                # Session ID (SID) if there is request from the north
@@ -272,7 +287,7 @@ class NodeSession(object):
         """
         self.active = True
         self.request = message
-        self.response = {}
+        self.response = None
         # north
         self.request_north = request_north
         self.id = self.request_north['session'] if request_north else ''
@@ -286,7 +301,7 @@ class NodeSession(object):
         # result
         return self.response
 
-    def stop(self, result: dict):
+    def stop(self, result):
         """
         Stop connection session after Agent answer.
         :return: flag that north session is open.
@@ -300,15 +315,18 @@ class NodeSession(object):
         if self.timeout_timer:
             self.timeout_timer.cancel()
             self.timeout_timer = None
-        # unfreeze waiting process
-        self.lock.release()
+        # unfreeze waiting process (if there is frozen one)
+        try:
+            self.lock.release()
+        except RuntimeError:
+            pass
 
     def timeout(self):
         """ Stop connection session by timeout. """
         if self.active:
             log.warning('Timeout for the message: %s' % self.request)
             self.node.alive(False)
-            self.stop({})
+            self.stop('')
 
 
 # Actors - Units processing data came from Agents
@@ -416,6 +434,10 @@ class Generator(Actor):
 
 # Storage
 
+storage_client = None
+storage_lock = Lock()
+
+
 def storage_init(server_address):
     global storage_client
     if storage_client:
@@ -423,36 +445,49 @@ def storage_init(server_address):
     storage_client = pymysql.connect(host=server_address, user='khome', passwd='khome', db='khome')
 
 
-def store_module(module: Module) -> bool:
+def storage_start() -> pymysql.cursors.Cursor:
+    storage_lock.acquire()
+    return storage_client.cursor()
+
+
+def storage_stop(cursor: pymysql.cursors.Cursor):
+    cursor.close()
+    storage_lock.release()
+
+
+def load_actors() -> dict:
+    result = {}
     if storage_client:
-        cursor = storage_client.cursor()
-        cursor.execute("INSERT INTO modules (nid, mal, name) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE name=%s",
-                       (module.nid, module.id, module.config['name'], module.config['name']))
-        storage_client.commit()
-        cursor.close()
-        return True
+        cursor = storage_start()
+        if cursor.execute("SELECT id, config FROM actors ORDER BY id"):
+            result = {row[0]: row[1] for row in cursor}
+        storage_stop(cursor)
+    return result
+
+
+def store_module(module: Module) -> bool:
+    try:
+        if storage_client:
+            cursor = storage_start()
+            cursor.execute("INSERT INTO modules (nid, mal, name) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE name=%s",
+                           (module.nid, module.id, module.config['name'], module.config['name']))
+            storage_client.commit()
+            storage_stop(cursor)
+            return True
+    except pymysql.DatabaseError as err:
+        log.warning("Cannot store Module in Storage " + str(err))
     return False
 
 
 def forget_module(module: Module):
-    if storage_client:
-        cursor = storage_client.cursor()
-        cursor.execute("DELETE FROM modules WHERE nid=%s AND mal=%s", (module.nid, module.id))
-        storage_client.commit()
-        cursor.close()
-
-
-def load_actors() -> dict:
-    if storage_client:
-        cursor = storage_client.cursor()
-        cursor.execute("SELECT id, config FROM actors ORDER BY id")
-        result = {row[0]: row[1] for row in cursor}
-        cursor.close()
-        return result
-    else:
-        return {}
-
-storage_client = None
+    try:
+        if storage_client:
+            cursor = storage_start()
+            cursor.execute("DELETE FROM modules WHERE nid=%s AND mal=%s", (module.nid, module.id))
+            storage_client.commit()
+            storage_stop(cursor)
+    except pymysql.DatabaseError as err:
+        log.warning("Cannot remove Module from Storage " + str(err))
 
 
 # Inventory - Carry data objects
@@ -519,12 +554,15 @@ class Inventory(object):
         # note that the structure was updated
         self.changed()
 
-    def register_module(self, node: Node, module_cfg: dict) -> Module:
+    def register_module(self, node: Node, module_cfg: dict, newly_added: bool = False) -> Module:
         new_module = node.add_module(module_cfg)
         if new_module:
             self.changed()
             # add Module Box to Manager Box list
             self.register_box(new_module.box)
+            # Store Module data in Storage
+            if newly_added:
+                store_module(new_module)
         return new_module
 
     def wipe_module(self, node: Node, mal: str) -> bool:

@@ -332,11 +332,13 @@ def on_connect_to_bus():
 def on_message_from_bus(topic, message):
     coordinates = topic.split('/')
     try:
-        # Message -> Object
-        message_object = json.loads(message)
+        # Message -> Object or Str
+        message_object = json.loads(message)    # json-structured data
+        if not isinstance(message_object, dict):
+            message_object = message            # plain data
         # South - data from an Agent
         if coordinates[1] in ('nodes', 'data'):
-            # Result
+            # Request response
             if handle_agent_response(coordinates, message_object):
                 pass
             # Node data
@@ -397,45 +399,47 @@ def answer_north(sid: str, message):
 
 # Handling South ---
 
-def handle_node_data(nid: str, mes: dict):
+def handle_node_data(nid: str, data):
     """
     Handle data from Node.
     :param nid: id of a Node sent data
-    :param mes: data in a message object
+    :param data: data in a message object
     :return: nothing
     """
     # Node said hello
-    if 'id' in mes:
+    if isinstance(data, dict) and 'id' in data:
         # Add/update Node
-        node = inv.register_node(mes)
+        node = inv.register_node(data)
         # Ask the Node for Module cfg
         if node:
-            mes = send_config_to_node(node, {"get": "gpio"})
-            if mes:
+            gpio_data = send_config_to_node(node, {"get": "gpio"})
+            if gpio_data:
                 try:
                     node = inv.nodes[nid]
-                    for module_cfg in mes['gpio']:
+                    for module_cfg in gpio_data['gpio']:
                         inv.register_module(node, module_cfg)
                     log.info('Modules of Node [%s] have been uploaded to Inventory: %s' %
-                             (nid, str([node.modules[m].get_cfg()['name'] for m in node.modules])))
+                             (nid, str(["%s (%s)" % (node.modules[m].get_cfg()['a'], node.modules[m].get_cfg()['name']) for m in node.modules])))
                 except KeyError:
                     pass
+        # Ask all modules data
+        send_config_to_node(inv.nodes[nid], {"get": "data"})
 
 
-def handle_module_data(nid: str, mal: str, mes: dict):
+def handle_module_data(nid: str, mal: str, data):
     """
     Handle data from Module.
     :param nid: id of a Node hosting Module sent data
     :param mal: alias of Module sent data
-    :param mes: data in a message object
+    :param data: data in a message object
     :return: nothing
     """
     try:
         module = inv.nodes[nid].modules[mal]
         # if it is not NACK
-        if 'nack' not in mes:
+        if not (isinstance(data, dict) and 'nack' in data):
             # store signal in the Box bound to Module
-            module.box.value = mes if 'ack' not in mes else mes['ack']  # TODO: remove when Agent will be updated
+            module.box.value = data
             # find/trigger right handler
             handle_value(
                 module.get_box_key(),
@@ -444,7 +448,7 @@ def handle_module_data(nid: str, mal: str, mes: dict):
         pass
 
 
-def handle_agent_response(coordinates: list, response: dict) -> bool:
+def handle_agent_response(coordinates: list, response) -> bool:
     try:
         node = inv.nodes[coordinates[2]]    # type: Node
         node.alive()
@@ -580,7 +584,8 @@ def request_manage_signal(request: dict) -> dict:
     val = params_in['value']
     # Send signal to Agent
     try:
-        return send_signal_to_module(inv.nodes[nid].modules[mal], val, request)
+        response = send_signal_to_module(inv.nodes[nid].modules[mal], val, request)
+        return {"ack": response} if response else ''
     except KeyError:
         raise ModuleError(nid, mal)
 
@@ -614,46 +619,78 @@ def request_manage_modules(request: dict) -> int:
         # process
         if gpio_to_add:
             # upload
-            result_gpio = Node.get_gpio(node.get_cfg_modules() + gpio_to_add)
-            response = send_config_to_node(node, result_gpio, request)
+            response = send_config_to_node(
+                node,
+                Node.get_gpio(node.get_cfg_modules() + gpio_to_add),
+                request)
             # sync
             if is_south_response_success(response):
                 for module_cfg in gpio_to_add:
-                    if inv.register_module(node, module_cfg):
+                    if inv.register_module(node, module_cfg, True):
                         count += 1
+            else:
+                pass    # TODO: handle error which could arise during add/edit
     elif request_type == 'del-module':
         # prepare
         gpio_current = node.get_cfg_modules()
-        gpio_to_be = [cfg for cfg in gpio_current if cfg['a'] not in params_in['modules']]
-        gpio_to_del = [cfg for cfg in gpio_current if cfg['a'] in params_in['modules']]
+        gpio_left = [cfg for cfg in gpio_current if cfg['a'] not in params_in['modules']]
+        gpio_deleted = [cfg for cfg in gpio_current if cfg['a'] in params_in['modules']]
         # process
-        if gpio_to_del:
+        if gpio_deleted:
             # upload
-            result_gpio = Node.get_gpio(gpio_to_be)
-            response = send_config_to_node(node, result_gpio, request)
-            # sync
+            response = send_config_to_node(
+                node,
+                Node.get_gpio(gpio_left),
+                request)
+            # sync up
             if is_south_response_success(response):
-                for module_cfg in gpio_to_del:
+                for module_cfg in gpio_deleted:
                     if inv.wipe_module(node, module_cfg['a']):
                         count += 1
-    elif request_type == 'edit-module':     # Module name could be updated only
+    elif request_type == 'edit-module':
         # Check mandatory params
         try:
             mal = params_in['module']
-            new_config = params_in['gpio']
-            new_name = new_config['name']
+            cfg_to_update = params_in['gpio']
         except KeyError:
             raise
         # Find Module
         try:
-            module = node.modules[mal]
+            module = node.modules[mal]  # type: Module
             # Update Module name
-            if module.config['name'] != new_name:
-                module.config['name'] = new_name
-                inv.changed()
-                count = int(inv.store_module(module))
+            if 'name' in cfg_to_update:
+                if module.config['name'] != cfg_to_update['name']:
+                    module.config['name'] = cfg_to_update['name']
+                    store_module(module)
+            # Update Module cfg
+            module_cfg = module.get_cfg()
+            gpio_updated = False
+            for entity in KHOME_AGENT_INTERFACE['gpio']:
+                if entity in cfg_to_update and entity != 'a':
+                    module_cfg[entity] = cfg_to_update[entity]
+                    gpio_updated = True
+            if gpio_updated:
+                # Make new Node GPIO
+                new_gpio = []
+                for alias in node.modules:
+                    if alias == mal:
+                        new_gpio.append(module_cfg)
+                    else:
+                        new_gpio.append(node.modules[alias].get_cfg())
+                # upload
+                response = send_config_to_node(
+                    node,
+                    Node.get_gpio(new_gpio),
+                    request)
+                # sync up
+                if is_south_response_success(response):
+                    module.config = module_cfg
+                    count = 1
+                    inv.changed()
+                else:
+                    pass    # handle error which could arise during add/edit
         except KeyError:
-            raise ModuleError
+            raise ModuleError(nid, mal)
 
     return count
 
@@ -717,7 +754,7 @@ def start(server_address='localhost'):
         # Storage
         storage_init(server_address)
         # Load configuration - Actors to Inventory
-        actor_configs = inv.load_actors()
+        actor_configs = load_actors()
         for aid in actor_configs:
             inv.register_actor(create_actor(actor_configs[aid], aid))
         inv.correct_box_key()

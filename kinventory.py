@@ -8,7 +8,7 @@ from threading import Timer
 import log
 import pymysql
 
-# Interface signature
+# Interface description
 KHOME_AGENT_INTERFACE = {
     'ver': '1',
     'commands': ['get', 'ping', 'clean', 'gpio', 'brdg'],
@@ -16,6 +16,23 @@ KHOME_AGENT_INTERFACE = {
     'gpio': ['p', 't', 'a', 'prd'],
     'brdg': ['ond', 'ols', 'map'],
     'map': ['in', 'out'],
+    # Modules from the following list are allowed for processing
+    'module_types': {
+        # Sensors
+        '1': "Generic Sensor Timer",
+        '2': "Generic Trigger Sensor",
+        '3': "IR Sensor",
+        '4': "DHT Sensor",
+        '5': "Obstacle Sensor",
+        '6': "PIR Sensor",
+        # Actuators
+        '51': "Switch"
+    },
+    # Pins available for setup
+    'pins_available': {
+        'esp8266': ['0', '2', '4', '5', '9', '10', '12', '13', '14', '15', '16']
+    },
+    # Error codes Module could send back
     'error_codes': {
         '1': "Agent does not have such Module",
         '2': "Target Module is not Actuator",
@@ -27,22 +44,6 @@ KHOME_AGENT_INTERFACE = {
         '101': "Bridge storage failure"
     }
 }
-
-# Modules from the following list are allowed for processing
-KHOME_MODULE_TYPES = {
-    # Sensors
-    '1': "Generic Sensor Timer",
-    '2': "Generic Trigger Sensor",
-    '3': "IR Sensor",
-    '4': "DHT Sensor",
-    '5': "Obstacle Sensor",
-    '6': "PIR Sensor",
-    # Actuators
-    '51': "Switch"
-}
-
-# Available pins
-PINS_ESP8266 = ['0', '2', '4', '5', '9', '10', '12', '13', '14', '15', '16']
 
 # Other
 BOXKEY_NOSRC = '~'
@@ -113,7 +114,9 @@ class DBObject(BaseObject):
         cfg = super().get_cfg()
         if for_db:
             del cfg['id']
-        return cfg
+            return json.dumps(cfg)
+        else:
+            return cfg
 
     def set_id(self, oid: str):
         """
@@ -159,6 +162,9 @@ class Module(AgentObject):
     def get_box_key(self) -> str:
         """ Get Key of data source - this Module itself. """
         return Box.box_key(self.nid, self.id)
+
+    def is_actuator(self):
+        return int(self.config['t']) > 50
 
 
 class ModuleError(Exception):
@@ -332,7 +338,7 @@ class NodeSession(object):
 # Actors - Units processing data came from Agents
 
 class Actor(DBObject):
-    def __init__(self, cfg, db_id):
+    def __init__(self, cfg, db_id: str):
         super().__init__(cfg, db_id)
         self.active = bool(self.config['active']) if 'active' in self.config else True
         self.box = Box(self, self.config['data']['box']) if 'box' in self.config['data'] else None
@@ -340,14 +346,17 @@ class Actor(DBObject):
     def store_db(self):
         """ Store config in DB. """
         if storage_client:
-            cursor = storage_client.cursor()
-            if int(self.id) > 0:
-                cursor.execute("UPDATE actors SET config=%s WHERE id=%s", (self.get_cfg(True), self.id))
-            else:
-                cursor.execute("INSERT INTO actors (config) VALUES (%s)", (self.get_cfg(True)))
-                self.set_id(cursor.lastrowid)
-            storage_client.commit()
-            cursor.close()
+            try:
+                cursor = storage_start()
+                if self.id and int(self.id) > 0:    # -id is a temp Actors have not been saved in Storage (was down)
+                    cursor.execute("UPDATE actors SET config=%s WHERE id=%s", (str(self.get_cfg(True)), self.id))
+                else:
+                    cursor.execute("INSERT INTO actors (config) VALUES (%s)", str(self.get_cfg(True)))
+                    self.set_id(str(cursor.lastrowid))
+                storage_client.commit()
+                storage_stop(cursor)
+            except pymysql.DatabaseError as err:
+                log.warning("Cannot store Actor in Storage %s" % err)
         else:
             if not self.id:
                 self.set_id(str(-id(self)))     # init Actor with a temporary id
@@ -355,10 +364,10 @@ class Actor(DBObject):
     def delete_db(self):
         """ Delete config from DB. """
         if storage_client and self.id:
-            cursor = storage_client.cursor()
+            cursor = storage_start()
             cursor.execute("DELETE FROM actors WHERE id=%s", self.id)
             storage_client.commit()
-            cursor.close()
+            storage_stop(cursor)
 
     def set_active(self, status: bool):
         self.active = status
@@ -390,6 +399,10 @@ class Actor(DBObject):
                 self.set_active(bool(params['status']))
                 count += 1
         return count
+
+    def apply_changes(self):
+        """ Method which is to be triggered after the Actor update. """
+        pass
 
 
 class Handler(Actor):
@@ -551,6 +564,8 @@ class Inventory(object):
         self.wipe_handler(actor)
         # del Actor from Actors list
         del self.actors[actor.id]
+        # del Actor from Storage
+        actor.delete_db()
         # note that the structure was updated
         self.changed()
 

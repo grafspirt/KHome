@@ -253,7 +253,7 @@ class EventJob(Job):
     def __init__(self, handler: str, value, start_time: ScheduleTime):
         super().__init__(handler)
         self.start_time = start_time    # the time which this Job shall start at
-        self.value = value              # value which is to be processed by the post-Actor
+        self.value = value              # value which is scheduled by this Job
 
     def process(self):
         handle_value(self.handler, self.value)
@@ -309,14 +309,28 @@ class Schedule(Generator):
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)
         # Instantiate jobs from cfg
+        self.schedule()
+
+    def schedule(self):
         for job_cfg in self.config['data']['jobs']:
             try:
-                if 'event' in job_cfg:      # job on time - event
-                    EventJob(self.id, job_cfg['value'], ScheduleTime(job_cfg['event'])).schedule()
-                elif 'period' in job_cfg:   # job within a period - period
-                    IntervalEventJob(self.id, job_cfg).schedule()
+                if 'event' in job_cfg:  # job on time - event
+                    EventJob(
+                        self.id,
+                        job_cfg['value'],
+                        ScheduleTime(job_cfg['event'])
+                    ).schedule()
+                elif 'period' in job_cfg:  # job within a period - period
+                    IntervalEventJob(
+                        self.id,
+                        job_cfg
+                    ).schedule()
             except KeyError:
-                pass  # not valid config - do not load
+                pass  # not valid config - do not load = do nothing
+
+    def apply_changes(self):
+        sch.clear(self.id)
+        self.schedule()
 
 
 # Bus ISR ---
@@ -419,7 +433,9 @@ def handle_node_data(nid: str, data):
                     for module_cfg in gpio_data['gpio']:
                         inv.register_module(node, module_cfg)
                     log.info('Modules of Node [%s] have been uploaded to Inventory: %s' %
-                             (nid, str(["%s (%s)" % (node.modules[m].get_cfg()['a'], node.modules[m].get_cfg()['name']) for m in node.modules])))
+                             (nid, str(["%s (%s)" % (
+                                 node.modules[m].get_cfg()['a'],
+                                 node.modules[m].get_cfg()['name']) for m in node.modules])))
                 except KeyError:
                     pass
         # Ask all modules data
@@ -484,7 +500,6 @@ def process_request(message):
     :param message: kind of {"session":<session-id>,"request":<command>,"params":{<params-set>}}
     """
     answer = ""
-    answer_template = '{"ack": "%d"}'
     request = json.loads(message)
     # Mandatory params
     sid = request['session']
@@ -508,22 +523,21 @@ def process_request(message):
             answer = request_manage_signal(request)
         # South - Module configuration
         elif request_type in ['add-module', 'del-module', 'edit-module']:
-            answer = answer_template % request_manage_modules(request)
-
-        # elif request_type in ['add-actor', 'edit-actor', 'del-actor']:
-        #     answer = answer_template % request_manage_actors(request_type, params)
+            answer = request_manage_modules(request)
+        elif request_type in ['add-actor', 'del-actor', 'edit-actor']:
+            answer = request_manage_actors(request)
         #
         # elif request_type in ['add-mapping', 'del-mapping']:
         #     try:
         #         answer = '{"ack": "%d"}' % inv.actors[params['actor']].process_request(request_type, params)
         #     except KeyError:
         #         pass
-    except (TypeError, ModuleError, NodeError) as err_obj:
-        answer = '{"nack": "%s"}' % err_obj
-    except KeyError as err_obj:
-        answer = '{"nack": "Key %s is absent in the request"}' % err_obj
-    except pymysql.err.OperationalError:
-        answer = '{"nack": "There are problems in DB"}'
+    except (TypeError, ModuleError, NodeError) as err:
+        answer = {"nack": str(err)}
+    except KeyError as err:
+        answer = {"nack": "Key %s is absent in the request" % err}
+    except pymysql.DatabaseError:
+        answer = {"nack": "There are problems in DB"}
     finally:
         # Answer with the same session id
         answer_north(sid, answer if answer else {"nack": "timeout"})
@@ -537,13 +551,14 @@ def request_manage_structure(request: dict) -> dict:
         # Export the whole structure
         return {
             'revision': inv.revision,
-            'module-types': KHOME_MODULE_TYPES,
+            'module-types': KHOME_AGENT_INTERFACE['module_types'],
             'nodes': [inv.nodes[node_id].get_cfg() for node_id in inv.nodes],
             'actors': [inv.actors[act_id].get_cfg() for act_id in inv.actors]}
 
 
 def request_manage_timetable() -> dict:
     timetable = {}
+    # TODO: there could be a bunch of jobs for a one time cell from different handlers
     for time_key in sch.timetable:
         for job in sch.timetable[time_key]:
             if isinstance(job, EventJob):
@@ -590,138 +605,166 @@ def request_manage_signal(request: dict) -> dict:
         raise ModuleError(nid, mal)
 
 
-def request_manage_modules(request: dict) -> int:
+def request_manage_modules(request: dict) -> dict:
     # Mandatory params
     params_in = request['params']
-    nid = params_in['node']
-    # Get corresponding node
+    # Get target node
     try:
-        node = inv.nodes[nid]   # type: Node
+        node = inv.nodes[params_in['node']]   # type: Node
     except KeyError:
-        raise NodeError(nid)
-
-    request_type = request['request']
-    count = 0
-
-    if request_type == 'add-module':
+        raise NodeError(params_in['node'])
+    # Initiate
+    response = {"nack": "Nothing to update"}
+    gpio_new = []
+    # Do the job
+    if request['request'] == 'add-module':
+        # Check mandatory params
+        try:
+            gpio_from_request = params_in['gpio']
+        except KeyError:
+            raise
         # prepare
         gpio_to_add = []
-        for module_cfg in params_in['gpio']:
-            if module_cfg['p'] not in PINS_ESP8266:         # pin is in hardware scope
+        for updated_cfg in gpio_from_request:
+            if updated_cfg['p'] not in KHOME_AGENT_INTERFACE['pins_available']['esp8266']:  # pin is in hardware scope
                 continue
-            if module_cfg['t'] not in KHOME_MODULE_TYPES:   # type is in inventory scope
+            if updated_cfg['t'] not in KHOME_AGENT_INTERFACE['module_types']:   # type is in inventory scope
                 continue
-            if module_cfg['p'] in node.get_pins_used():     # pin is in use
+            if updated_cfg['p'] in node.get_pins_used():     # pin is in use
                 continue
-            if module_cfg['a'] in node.modules:             # alias is not unique
+            if updated_cfg['a'] in node.modules:             # alias is not unique
                 continue
-            gpio_to_add.append(module_cfg)
+            gpio_to_add.append(updated_cfg)
         # process
         if gpio_to_add:
+            gpio_new = node.get_cfg_modules() + gpio_to_add
             # upload
             response = send_config_to_node(
                 node,
-                Node.get_gpio(node.get_cfg_modules() + gpio_to_add),
+                Node.get_gpio(gpio_new),
                 request)
             # sync
             if is_south_response_success(response):
                 for module_cfg in gpio_to_add:
                     if inv.register_module(node, module_cfg, True):
-                        count += 1
-            else:
-                pass    # TODO: handle error which could arise during add/edit
-    elif request_type == 'del-module':
+                        inv.changed()
+    elif request['request'] == 'del-module':
         # prepare
         gpio_current = node.get_cfg_modules()
-        gpio_left = [cfg for cfg in gpio_current if cfg['a'] not in params_in['modules']]
-        gpio_deleted = [cfg for cfg in gpio_current if cfg['a'] in params_in['modules']]
+        gpio_new = [cfg for cfg in gpio_current if cfg['a'] not in params_in['modules']]
+        gpio_to_delete = [cfg for cfg in gpio_current if cfg['a'] in params_in['modules']]
         # process
-        if gpio_deleted:
+        if gpio_to_delete:
             # upload
             response = send_config_to_node(
                 node,
-                Node.get_gpio(gpio_left),
+                Node.get_gpio(gpio_new),
                 request)
             # sync up
             if is_south_response_success(response):
-                for module_cfg in gpio_deleted:
+                for module_cfg in gpio_to_delete:
                     if inv.wipe_module(node, module_cfg['a']):
-                        count += 1
-    elif request_type == 'edit-module':
+                        inv.changed()
+    elif request['request'] == 'edit-module':
         # Check mandatory params
         try:
-            mal = params_in['module']
-            cfg_to_update = params_in['gpio']
+            gpio_from_request = params_in['gpio']
         except KeyError:
             raise
-        # Find Module
-        try:
-            module = node.modules[mal]  # type: Module
-            # Update Module name
-            if 'name' in cfg_to_update:
-                if module.config['name'] != cfg_to_update['name']:
-                    module.config['name'] = cfg_to_update['name']
-                    store_module(module)
-            # Update Module cfg
-            module_cfg = module.get_cfg()
-            gpio_updated = False
-            for entity in KHOME_AGENT_INTERFACE['gpio']:
-                if entity in cfg_to_update and entity != 'a':
-                    module_cfg[entity] = cfg_to_update[entity]
-                    gpio_updated = True
-            if gpio_updated:
-                # Make new Node GPIO
-                new_gpio = []
-                for alias in node.modules:
-                    if alias == mal:
-                        new_gpio.append(module_cfg)
-                    else:
-                        new_gpio.append(node.modules[alias].get_cfg())
-                # upload
-                response = send_config_to_node(
-                    node,
-                    Node.get_gpio(new_gpio),
-                    request)
-                # sync up
-                if is_south_response_success(response):
-                    module.config = module_cfg
-                    count = 1
-                    inv.changed()
-                else:
-                    pass    # handle error which could arise during add/edit
-        except KeyError:
-            raise ModuleError(nid, mal)
+        # Get GPIOs being updated
+        gpio_to_update = {}
+        for updated_cfg in gpio_from_request:
+            try:
+                mal = updated_cfg['a']
+                module = node.modules[mal]  # type: Module
+                # Update Module name
+                if 'name' in updated_cfg:
+                    if module.config['name'] != updated_cfg['name']:
+                        module.config['name'] = updated_cfg['name']
+                        store_module(module)
+                # Update Module cfg
+                is_gpio_updated = False
+                existing_cfg = module.get_cfg()
+                for entity in KHOME_AGENT_INTERFACE['gpio']:
+                    if entity in updated_cfg and entity != 'a':
+                        existing_cfg[entity] = updated_cfg[entity]
+                        is_gpio_updated = True
+                # Process
+                if is_gpio_updated:
+                    gpio_to_update[mal] = existing_cfg
+            except KeyError:
+                pass
+        # Merge with the rest GPIOs
+        for mal in node.modules:
+            if mal in gpio_to_update:
+                gpio_new.append(gpio_to_update[mal])
+            else:
+                gpio_new.append(node.modules[mal].get_cfg())
+        # upload
+        response = send_config_to_node(
+            node,
+            Node.get_gpio(gpio_new),
+            request)
+        # sync up
+        if is_south_response_success(response):
+            for mal in node.modules:
+                if mal in gpio_to_update:
+                    node.modules[mal].config = gpio_to_update[mal]
+            inv.changed()
+    # Initiate Actuators with the actual values (from boxes) after Modules updating
+    if is_south_response_success(response):
+        for module_cfg in gpio_new:
+            module = node.modules[module_cfg['a']]
+            if module.is_actuator():
+                send_signal_to_module(module, module.box.value)
 
-    return count
+    return response
 
 
-def request_manage_actors(command, params_in: dict):
+def request_manage_actors(request: dict) -> dict:
+    # Mandatory params
+    params_in = request['params']
+    # Initiate
+    response = {"nack": "Nothing to update"}
     count = 0
+    # Do the job
+    if request['request'] == 'add-actor':
+        actor = create_actor(params_in)
+        if actor:
+            actor.store_db()
+            inv.register_actor(actor)
+            count += 1
+    elif request['request'] == 'del-actor':
+        # Wipe from Inventory
+        for aid in params_in['actors']:
+            if aid in inv.actors:
+                # Del from Storage
+                inv.actors[aid].delete_db()
+                # Del from Inventory
+                inv.wipe_actor(inv.actors[aid])
+                count += 1
+    elif request['request'] == 'edit-actor':
+        # Mandatory params
+        data_from_request = params_in['data']
+        aid = data_from_request['id']
+        # Update
+        if aid in inv.actors:
+            actor = inv.actors[aid]     # type: Actor
+            for item in data_from_request:
+                if item != 'id':
+                    actor.config['data'][item] = data_from_request[item]
+                    count += 1
+            # Store sync
+            if count:
+                actor.store_db()
+            # Apply changes in Actor
+            actor.apply_changes()
 
-    # if command == 'add-actor':
-    #     actor = Actor.create(params_in)
-    #     actor.store_db()
-    #     inv.append_actor(actor)    # create + add to reg
-    #     count += 1
-    # elif command == 'del-actor':
-    #     for oid in params_in['actors']:
-    #         if oid in inv.actors:
-    #             actor = inv.actors[oid]
-    #             # wipe DB
-    #             actor.delete_db()
-    #             # wipe boxes
-    #             inv.remove_actor(actor)
-    #             count += 1
-    # elif command == 'edit-actor':
-    #     actor = inv.actors[params_in['actor']]
-    #     count = actor.process_request(command, params_in)
-    #     if count:
-    #         actor.store_db()
-
+    # Answer
     if count:
         inv.changed()
-
-    return count
+        response = {"ack": "1"}
+    return response
 
 
 # Initiation ---
@@ -743,8 +786,8 @@ def create_actor(cfg, aid=''):
             cfg_obj,
             str(aid))
     except KeyError:
-        log.warning('Actor class "%s" could not be found for: %s' % (cfg_obj['type'], json.dumps(cfg_obj)))
-    return None
+        log.warning('Actor class "%s" is not found for configuration: %s' % (cfg_obj['type'], json.dumps(cfg_obj)))
+        return None
 
 
 def start(server_address='localhost'):
@@ -771,6 +814,6 @@ def start(server_address='localhost'):
         log.info('Scheduler has been started.')
         # Start
         bus.listen()
-    except ConnectionRefusedError as err:
-        log.error('Cannot connected to Bus (%s). KHome server is stopped.' % err)
-        log.info('KHome server has not been started.')
+    except (ConnectionRefusedError, TimeoutError) as err:
+        log.error('Cannot connect to Bus (%s).' % err)
+        log.info('KHome manager stops with failure.')

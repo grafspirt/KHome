@@ -10,12 +10,14 @@ import pymysql
 
 # Interface description
 KHOME_AGENT_INTERFACE = {
-    'ver': '1',
-    'commands': ['get', 'ping', 'clean', 'gpio', 'brdg'],
-    'get': ['gpio', 'brdg', 'data'],
-    'gpio': ['p', 't', 'a', 'prd'],
-    'brdg': ['ond', 'ols', 'map'],
-    'map': ['in', 'out'],
+    'ver': "1",
+    'positive': "ack",
+    'negative': "nack",
+    'commands': ["get", "ping", "clean", "gpio", "brdg"],
+    'get': ["gpio", "brdg", "data"],
+    'gpio': ["p", "t", "a", "prd"],
+    'brdg': ["ond", "ols", "map"],
+    'map': ["in", "out"],
     # Modules from the following list are allowed for processing
     'module_types': {
         # Sensors
@@ -49,6 +51,7 @@ KHOME_AGENT_INTERFACE = {
 BOXKEY_NOSRC = '~'
 BOXKEY_SYSTEM = '#'
 ALL_MODULES = '~'
+TIMEOUT_RESPONSE = {KHOME_AGENT_INTERFACE['negative']: "timeout"}
 
 
 # Base classes
@@ -197,6 +200,7 @@ class Box(object):
 
 
 class Node(AgentObject):
+    """ Hardware unit managing Modules. """
     def __init__(self, cfg):
         super().__init__(cfg)
         self.type = 'esp8266'                       # Node hardware type
@@ -332,7 +336,7 @@ class NodeSession(object):
         if self.active:
             log.warning('Timeout for the message: %s' % self.request)
             self.node.alive(False)
-            self.stop('')
+            self.stop(TIMEOUT_RESPONSE)
 
 
 # Actors - Units processing data came from Agents
@@ -384,21 +388,6 @@ class Actor(DBObject):
         :return: nothing
         """
         pass
-
-    def process_request(self, command, params):
-        """
-        Process request got and redirected by the manager.
-        DNF! Call Manager().inventory_changed() in case of inventory changing
-        :param command: Request alias
-        :param params: Parameters transferred along with the request
-        :return: A number of entities changed
-        """
-        count = 0
-        if command == 'edit-actor':
-            if 'status' in params:
-                self.set_active(bool(params['status']))
-                count += 1
-        return count
 
     def apply_changes(self):
         """ Method which is to be triggered after the Actor update. """
@@ -569,14 +558,14 @@ class Inventory(object):
         # note that the structure was updated
         self.changed()
 
-    def register_module(self, node: Node, module_cfg: dict, newly_added: bool = False) -> Module:
+    def register_module(self, node: Node, module_cfg: dict, added: bool = False) -> Module:
         new_module = node.add_module(module_cfg)
         if new_module:
             self.changed()
             # add Module Box to Manager Box list
             self.register_box(new_module.box)
             # Store Module data in Storage
-            if newly_added:
+            if added:
                 store_module(new_module)
         return new_module
 
@@ -650,6 +639,16 @@ class Inventory(object):
                 self.wipe_actor(actor)
         except KeyError:
             pass    # there are no postponed Boxes
+
+    def handle_value(self, key, value):
+        if key in self.handlers:
+            for actor in inv.handlers[key]:
+                # Actor is triggered if it is active
+                if actor.active:
+                    actor.process_signal(value)
+                # try to process Actor Box by handlers(actors) referring to this Actor
+                if actor.box:
+                    self.handle_value(actor.id, actor.box.value)
 
 # Inventory instance
 inv = Inventory()

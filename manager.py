@@ -5,7 +5,7 @@ from pymysql import DatabaseError
 from urllib.parse import urlencode
 import http.client as http_client
 import bus
-from kinventory import *
+from inventory import *
 from scheduler import *
 
 
@@ -53,24 +53,6 @@ class ActorWithMapping(Handler):
             self.config['data']['map'].remove(self.mapping[map_id].config)
             del self.mapping[map_id]
 
-    def process_request(self, command, params) -> int:
-        count = 0
-
-        if command == 'add-mapping':
-            for map_unit in params['map']:
-                self.add_mapping(map_unit)
-                count += 1
-
-        elif command == 'del-mapping':
-            for map_id in params['maps']:
-                self.del_mapping(map_id)
-                count += 1
-
-        elif command == 'edit-actor':
-            count += super().process_request(command, params)
-
-        return count
-
 
 class ActorLog(Handler):
     """
@@ -83,18 +65,6 @@ class ActorLog(Handler):
         self.count = 0
         if 'period' not in self.config['data']:
             self.config['data']['period'] = 5
-
-    def process_request(self, command, params) -> int:
-        count = 0
-
-        if command == 'edit-actor':
-            if 'period' in params:
-                self.config['data']['period'] = params['period']
-                count += 1
-
-            count += super().process_request(command, params)
-
-        return count
 
     def process_signal(self, sig):
         self.count += 1
@@ -119,11 +89,11 @@ class Resend(ActorWithMapping):
         # mapping from 1 to N
         for map_key in self.mapping:
             map_unit = self.mapping[map_key]
-            if map_unit['in'] == sig:
+            if map_unit.config['in'] == sig:
                 try:
                     send_signal_to_module(
-                        inv.nodes[map_unit['trg']].modules[map_unit['trg_mdl']],
-                        map_unit['out'])
+                        inv.nodes[map_unit.config['trg']].modules[map_unit.config['trg_mdl']],
+                        map_unit.config['out'])
                 except KeyError:
                     pass
 
@@ -214,32 +184,18 @@ class Average(Handler):
     def process_signal(self, sig):
         """
         Calculate average values on data series having length less or equal to self.depth
-        Store result in its own Register
+        Store result in its own Box
         Example: {"key1": "number", "key2": "number", ...}
-
-        :param sig: dict - signal data
+        :param sig: signal data
         :return: nothing
         """
-        if self.box:
-            if isinstance(sig, dict):
-                averaged_sig = sig.copy()
-                for key in sig:
-                    averaged_sig[key] = self.__calc(key, float(sig[key]))
-                self.box.value = averaged_sig
-            elif isinstance(sig, (int, float, str)):
-                self.box.value = self.__calc('.', sig)
-
-    def process_request(self, command, params) -> int:
-        count = 0
-
-        if command == 'edit-actor':
-            if 'depth' in params:
-                self.config['data']['depth'] = params['depth']
-                count += 1
-
-            count += super().process_request(command, params)
-
-        return count
+        if isinstance(sig, dict):
+            averaged_sig = sig.copy()
+            for key in sig:
+                averaged_sig[key] = self.__calc(key, float(sig[key]))
+            self.box.value = averaged_sig
+        elif isinstance(sig, (int, float, str)):
+            self.box.value = self.__calc('.', sig)
 
 
 class EventJob(Job):
@@ -256,10 +212,7 @@ class EventJob(Job):
         self.value = value              # value which is scheduled by this Job
 
     def process(self):
-        handle_value(self.handler, self.value)
-
-    def __str__(self):
-        return 'Trigger event "%s" for Schedule[%s] at %s' % (self.value, self.handler, self.start_time)
+        inv.handle_value(self.handler, self.value)
 
 
 class IntervalEventJob(Job):
@@ -286,7 +239,11 @@ class IntervalEventJob(Job):
 
         # Schedule EventJobs for the calculated period
         while stop_time >= start_time:
-            EventJob(self.handler, self.config['value'], start_time).schedule()
+            EventJob(
+                self.handler,
+                self.config['value'],
+                start_time
+            ).schedule()
             start_time += period_delta
 
         # Schedule this interval job to stop_time in order to re-schedule it again
@@ -299,9 +256,6 @@ class IntervalEventJob(Job):
         sch.clean_timetable = True
         # ask Scheduler to re-schedule this interval job
         sch.jobs_to_schedule.append(self)
-
-    def __str__(self):
-        return 'Reschedule interval for Schedule[%s]: %s' % (self.handler, self.config)
 
 
 class Schedule(Generator):
@@ -451,13 +405,13 @@ def handle_module_data(nid: str, mal: str, data):
     :return: nothing
     """
     try:
-        module = inv.nodes[nid].modules[mal]
         # if it is not NACK
-        if not (isinstance(data, dict) and 'nack' in data):
-            # store signal in the Box bound to Module
+        if is_agent_response_success(data):
+            module = inv.nodes[nid].modules[mal]
+            # store signal in the Module Box
             module.box.value = data
             # find/trigger right handler
-            handle_value(
+            inv.handle_value(
                 module.get_box_key(),
                 module.box.value)
     except KeyError:
@@ -477,19 +431,13 @@ def handle_agent_response(coordinates: list, response) -> bool:
     return False
 
 
-def handle_value(key, value):
-    if key in inv.handlers:
-        for actor in inv.handlers[key]:
-            # Actor is triggered if it is active
-            if actor.active:
-                actor.process_signal(value)
-            # try to process Actor Box by handlers(actors) referring to this Actor
-            if actor.box:
-                handle_value(actor.id, actor.box.value)
-
-
-def is_south_response_success(response: dict) -> bool:
-    return response and 'nack' not in response
+def is_agent_response_success(response) -> bool:
+    """
+    Possible responses: string, dict: ack, nack, data.
+    :param response: response come from Agent
+    :return: True if response is not NACK
+    """
+    return not(isinstance(response, dict) and KHOME_AGENT_INTERFACE['negative'] in response)
 
 
 # Handling North ---
@@ -526,21 +474,20 @@ def process_request(message):
             answer = request_manage_modules(request)
         elif request_type in ['add-actor', 'del-actor', 'edit-actor']:
             answer = request_manage_actors(request)
-        #
         # elif request_type in ['add-mapping', 'del-mapping']:
         #     try:
         #         answer = '{"ack": "%d"}' % inv.actors[params['actor']].process_request(request_type, params)
         #     except KeyError:
         #         pass
     except (TypeError, ModuleError, NodeError) as err:
-        answer = {"nack": str(err)}
+        answer = {KHOME_AGENT_INTERFACE['negative']: str(err)}
     except KeyError as err:
-        answer = {"nack": "Key %s is absent in the request" % err}
+        answer = {KHOME_AGENT_INTERFACE['negative']: "Key %s is absent in the request" % err}
     except pymysql.DatabaseError:
-        answer = {"nack": "There are problems in DB"}
+        answer = {KHOME_AGENT_INTERFACE['negative']: "There are problems in DB"}
     finally:
         # Answer with the same session id
-        answer_north(sid, answer if answer else {"nack": "timeout"})
+        answer_north(sid, answer)
 
 
 def request_manage_structure(request: dict) -> dict:
@@ -557,13 +504,12 @@ def request_manage_structure(request: dict) -> dict:
 
 
 def request_manage_timetable() -> dict:
-    timetable = {}
-    # TODO: there could be a bunch of jobs for a one time cell from different handlers
-    for time_key in sch.timetable:
+    timetable = []
+    for time_key in sorted(sch.timetable):
         for job in sch.timetable[time_key]:
             if isinstance(job, EventJob):
-                timetable[str(job.start_time)] = job.value
-    return {'timetable': timetable}
+                timetable.append({"time": str(job.start_time), "signal": job.value, "handler": job.handler})
+    return {"timetable": timetable}
 
 
 def request_manage_data(request: dict) -> dict:
@@ -600,7 +546,7 @@ def request_manage_signal(request: dict) -> dict:
     # Send signal to Agent
     try:
         response = send_signal_to_module(inv.nodes[nid].modules[mal], val, request)
-        return {"ack": response} if response else ''
+        return {"ack": response} if is_agent_response_success(response) else response
     except KeyError:
         raise ModuleError(nid, mal)
 
@@ -614,8 +560,8 @@ def request_manage_modules(request: dict) -> dict:
     except KeyError:
         raise NodeError(params_in['node'])
     # Initiate
-    response = {"nack": "Nothing to update"}
-    gpio_new = []
+    response = {KHOME_AGENT_INTERFACE['negative']: "Nothing to update"}
+    gpio_result = []
     # Do the job
     if request['request'] == 'add-module':
         # Check mandatory params
@@ -637,31 +583,31 @@ def request_manage_modules(request: dict) -> dict:
             gpio_to_add.append(updated_cfg)
         # process
         if gpio_to_add:
-            gpio_new = node.get_cfg_modules() + gpio_to_add
+            gpio_result = node.get_cfg_modules() + gpio_to_add
             # upload
             response = send_config_to_node(
                 node,
-                Node.get_gpio(gpio_new),
+                Node.get_gpio(gpio_result),
                 request)
-            # sync
-            if is_south_response_success(response):
+            # sync up
+            if is_agent_response_success(response):
                 for module_cfg in gpio_to_add:
                     if inv.register_module(node, module_cfg, True):
                         inv.changed()
     elif request['request'] == 'del-module':
         # prepare
         gpio_current = node.get_cfg_modules()
-        gpio_new = [cfg for cfg in gpio_current if cfg['a'] not in params_in['modules']]
+        gpio_result = [cfg for cfg in gpio_current if cfg['a'] not in params_in['modules']]
         gpio_to_delete = [cfg for cfg in gpio_current if cfg['a'] in params_in['modules']]
         # process
         if gpio_to_delete:
             # upload
             response = send_config_to_node(
                 node,
-                Node.get_gpio(gpio_new),
+                Node.get_gpio(gpio_result),
                 request)
             # sync up
-            if is_south_response_success(response):
+            if is_agent_response_success(response):
                 for module_cfg in gpio_to_delete:
                     if inv.wipe_module(node, module_cfg['a']):
                         inv.changed()
@@ -697,24 +643,24 @@ def request_manage_modules(request: dict) -> dict:
         # Merge with the rest GPIOs
         for mal in node.modules:
             if mal in gpio_to_update:
-                gpio_new.append(gpio_to_update[mal])
+                gpio_result.append(gpio_to_update[mal])
             else:
-                gpio_new.append(node.modules[mal].get_cfg())
+                gpio_result.append(node.modules[mal].get_cfg())
         # upload
         response = send_config_to_node(
             node,
-            Node.get_gpio(gpio_new),
+            Node.get_gpio(gpio_result),
             request)
         # sync up
-        if is_south_response_success(response):
+        if is_agent_response_success(response):
             for mal in node.modules:
                 if mal in gpio_to_update:
                     node.modules[mal].config = gpio_to_update[mal]
             inv.changed()
     # Initiate Actuators with the actual values (from boxes) after Modules updating
-    if is_south_response_success(response):
-        for module_cfg in gpio_new:
-            module = node.modules[module_cfg['a']]
+    if is_agent_response_success(response):
+        for mal in node.modules:
+            module = node.modules[mal]
             if module.is_actuator():
                 send_signal_to_module(module, module.box.value)
 
@@ -725,7 +671,7 @@ def request_manage_actors(request: dict) -> dict:
     # Mandatory params
     params_in = request['params']
     # Initiate
-    response = {"nack": "Nothing to update"}
+    response = {KHOME_AGENT_INTERFACE['negative']: "Nothing to update"}
     count = 0
     # Do the job
     if request['request'] == 'add-actor':

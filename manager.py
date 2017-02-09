@@ -118,7 +118,7 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
             return super().__new__(cls, cfg, db_id)
         else:
             log.warning(
-                'Actor %s#%s could not be loaded as it does not have "key" in config.' %
+                'Actor %s#%s could not be loaded: no "key" in config.' %
                 (cfg['type'].lower(), db_id))
             return None
 
@@ -167,7 +167,7 @@ class Average(Handler):
         if 'box' in cfg['data']:
             return super().__new__(cls, cfg, db_id)
         else:
-            log.warning('Actor %s#%s could not be loaded as it does not have "box" in config.' %
+            log.warning('Actor %s#%s could not be loaded: no "box" in config.' %
                         (cfg['type'], db_id))
             return None
 
@@ -520,14 +520,14 @@ def request_manage_timetable() -> dict:
 
 
 def request_manage_data(request: dict) -> dict:
-    def get_box(__key):
-        out = {
-            'key': __key,
-            'boxes': {box.name: box.value for box in inv.boxes[__key]}}
-        return out
-    # Gather boxes related to the particular key or all boxes otherwise
-    result = [get_box(key) for key in request['params']] if 'params' in request else [get_box(key) for key in inv.boxes]
-    return {'modules-data': result}
+    def get_boxes_by_key(__key):
+        return {box_name: inv.boxes[__key][box_name].value for box_name in inv.boxes[__key]}
+    # Gather boxes related to the box keys defined in the request or all registered boxes otherwise
+    if 'params' in request:
+        result = {key: get_boxes_by_key(key) for key in request['params']}
+    else:
+        result = {key: get_boxes_by_key(key) for key in inv.boxes}
+    return {'boxes': result}
 
 
 def request_manage_ping(request: dict) -> dict:

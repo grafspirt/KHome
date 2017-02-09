@@ -425,7 +425,7 @@ class Handler(Actor):
             return super().__new__(cls)
         else:
             log.warning(
-                'Actor %s#%s could not be loaded as it does not have "src" in config.' %
+                'Actor %s#%s could not be loaded: no "src" in config.' %
                 (cfg['type'].lower(), db_id))
             return None
 
@@ -505,16 +505,15 @@ def load_actors_finalize():
     After all Actors are loaded the system tries to re-assign all such Boxed to correct keys.
     """
     try:
-        # Try to find sources to the "pending" Handlers
+        # Try to find sources to the "pending" Handlers by registering again
         boxes_wo_src = inv.boxes[BOXKEY_NOSRC].copy()
-        inv.boxes[BOXKEY_NOSRC] = []
-        for box in boxes_wo_src:
-            inv._register_box(box)
+        inv.boxes[BOXKEY_NOSRC] = {}
+        for box_name in boxes_wo_src:
+            inv.register_box(boxes_wo_src[box_name])
         # Wipe Handlers without a source from Inventory
-        for actor in [box.owner for box in inv.boxes[BOXKEY_NOSRC]]:
+        for actor in [inv.boxes[BOXKEY_NOSRC][box_name].owner for box_name in inv.boxes[BOXKEY_NOSRC]]:
             log.warning(
-                'Actor %s#%s is to be deleted as no source was found for it.' %
-                (actor.config['type'].lower(), actor.id))
+                'Actor %s is to be deleted as no source was found for it.' % actor)
             inv.wipe_actor(actor)
     except KeyError:
         pass    # there are no postponed Boxes
@@ -595,7 +594,7 @@ class Inventory(object):
             self._register_handler(actor)
             # add Actor Box to Boxes list
             if actor.box:
-                self._register_box(actor.box)
+                self.register_box(actor.box)
             # note that the structure was updated
             self.changed()
         return actor
@@ -618,7 +617,7 @@ class Inventory(object):
         if new_module:
             self.changed()
             # add Module Box to Manager Box list
-            self._register_box(new_module.box)
+            self.register_box(new_module.box)
             # Store Module data in Storage
             if added:
                 store_module(new_module)
@@ -655,23 +654,30 @@ class Inventory(object):
             handler_key = handler.get_handler_key()
             self.handlers[handler_key].remove(handler)
 
-    def _register_box(self, box: Box):
+    def register_box(self, box: Box):
         """
-        Add Box object to the Manager Box list using the key based on nid/mal got from an Actor.
-        :param box: object of Register to be added
-        :return: nothing
+        Add Box object to the Manager Box list using the key based on nid/mal got from box owner.
+        :param box: Box to be registered
         """
         key = box.owner.get_box_key()
         try:
-            self.boxes[key].append(box)
+            self.boxes[key][box.name] = box
         except KeyError:
-            self.boxes[key] = [box]
+            self.boxes[key] = {}
+            self.boxes[key][box.name] = box
 
     def _wipe_box(self, box: Box):
-        key = box.owner.get_box_key()
-        self.boxes[key].remove(box)
+        """
+        Wipe Box from Manager Box list.
+        :param box: Box to be wiped.
+        """
+        del self.boxes[box.owner.get_box_key()][box.name]
 
     def _wipe_boxes_by_key(self, key: str):
+        """
+        Wipe set of Boxes tied to one box key.
+        :param key: Box key to be wiped with all boxes tied to.
+        """
         del self.boxes[key]
 
 # Inventory instance

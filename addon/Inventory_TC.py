@@ -21,7 +21,7 @@ class MyTestCase(unittest.TestCase):
         self.assertIsNotNone(module)
         self.assertEquals(node.modules['IR'], module)
         self.assertEquals(module.config['p'], "2")
-        self.assert_(module.box in inv.boxes['I23456/IR'])  # Boxes
+        self.assertIn(module.box.name, inv.boxes['I23456/IR'])  # Boxes
         self.assertGreater(inv.revision, prev_rev)
 
     def test03_addModuleTemp(self):
@@ -31,7 +31,7 @@ class MyTestCase(unittest.TestCase):
         module = inv.register_module(node, {"t": "1", "a": "TEMP", "p": "5"})
         self.assertIsNotNone(module)
         self.assertEquals(node.modules['TEMP'], module)
-        self.assert_(module.box in inv.boxes['I23456/TEMP'])  # Boxes
+        self.assertIn(module.box.name, inv.boxes['I23456/TEMP'])  # Boxes
         self.assertGreater(inv.revision, prev_rev)
 
     def test04_addSecondNodeModule(self):
@@ -44,11 +44,13 @@ class MyTestCase(unittest.TestCase):
         module = inv.register_module(node, {"t": "51", "a": "SW", "p": "2"})
         self.assertIsNotNone(module)
         self.assertEquals(node.modules['SW'], module)
-        self.assert_(module.box in inv.boxes['J23456/SW'])
+        self.assertIn(module.box.name, inv.boxes['J23456/SW'])
         self.assertGreater(inv.revision, prev_rev)
 
     def test09_tryActorHandlerWOSrc(self):
-        actor = create_actor({"type": "logdb", "data": {"src_mdl": "TEMP"}})
+        actor = create_actor(
+            {"type": "logdb", "data": {"src_mdl": "TEMP"}},
+            '5555')
         self.assertIsNone(actor)
 
     def test10_tryActorNone(self):
@@ -72,20 +74,15 @@ class MyTestCase(unittest.TestCase):
     def test12_tryActorAverageWOBox(self):
         actor = create_actor(
             {"type": "average", "data": {"src": "I23456", "src_mdl": "TEMP"}},
-            '3')
+            '2')
         self.assertIsNone(actor)
 
-    def test13_addActorAverage(self):
+    def test13_addAverageBeforeSrc(self):
         actor = create_actor(
-            {"type": "average", "data": {"src": "I23456", "src_mdl": "TEMP", "box": "Average"}},
-            '3')
+            {"type": "average", "data": {"src": "3", "box": "Avenger"}},
+            '33')
         self.assertIsNotNone(actor)
-        prev_rev = inv.revision
         self.assertEquals(inv.register_actor(actor), actor)
-        self.assertEquals(inv.actors['3'], actor)
-        self.assert_('depth' in actor.config['data'])           # shall have 'depth' param
-        self.assert_(actor.box in inv.boxes['I23456/TEMP'])     # shall have box
-        self.assertGreater(inv.revision, prev_rev)
 
     def test14_addActorLogdb(self):
         actor = create_actor(
@@ -101,7 +98,7 @@ class MyTestCase(unittest.TestCase):
     def test15_tryActorLogthingspeakWOKey(self):
         actor = create_actor(
             {"type": "logthingspeak", "data": {"src": "I23456", "src_mdl": "TEMP"}},
-            '11')
+            '5')
         self.assertIsNone(actor)
 
     def test16_addActorLogthingspeak(self):
@@ -110,11 +107,36 @@ class MyTestCase(unittest.TestCase):
                 {"in": "temp", "out": "field1"},
                 {"in": "humid", "out": "field2"}
             ]}},
-            '11')
+            '6')
         self.assertIsNotNone(actor)
         prev_rev = inv.revision
         self.assertEquals(inv.register_actor(actor), actor)
         self.assertGreater(inv.revision, prev_rev)
+
+    def test17_addActorAverage(self):
+        actor = create_actor(
+            {"type": "average", "data": {"src": "I23456", "src_mdl": "TEMP", "box": "Average"}},
+            '3')
+        self.assertIsNotNone(actor)
+        prev_rev = inv.revision
+        self.assertEquals(inv.register_actor(actor), actor)
+        self.assertEquals(inv.actors['3'], actor)
+        self.assert_('depth' in actor.config['data'])           # shall have 'depth' param
+        self.assertIn(actor.box.name, inv.boxes['I23456/TEMP'])     # shall have box
+        self.assertGreater(inv.revision, prev_rev)
+
+    def test20_finalizeActorLoad(self):
+        actor = create_actor(
+            {"type": "average", "data": {"src": "000", "box": "DeadAvenger"}},
+            '333')
+        self.assertIsNotNone(actor)
+        self.assertEquals(inv.register_actor(actor), actor)
+        self.assertIn('DeadAvenger', inv.boxes[BOXKEY_NOSRC])
+        self.assertIn('333', inv.actors)
+        self.assertIn('Avenger', inv.boxes[BOXKEY_NOSRC])
+        load_actors_finalize()
+        self.assertIn('Avenger', inv.boxes[inv.actors['3'].get_box_key()])
+        self.assertNotIn('333', inv.actors)
 
     def test21_processActorResend(self):
         handle_value('I23456/IR', "20df8976")
@@ -122,12 +144,12 @@ class MyTestCase(unittest.TestCase):
 
     def test98_wipeActor(self):
         actor = inv.actors['3']
-        prev_box_count = len(inv.boxes[actor.get_box_key()])
+        self.assertIn(actor.box.name, inv.boxes[actor.get_box_key()])
         prev_rev = inv.revision
         inv.wipe_actor(actor)
         self.assertFalse('3' in inv.actors)
         self.assertGreater(inv.revision, prev_rev)
-        self.assertEquals(len(inv.boxes[actor.get_box_key()]), prev_box_count - 1)
+        self.assertNotIn(actor.box.name, inv.boxes[actor.get_box_key()])
 
     def test99_wipeModule(self):
         # Module

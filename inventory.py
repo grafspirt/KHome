@@ -7,6 +7,7 @@ from threading import Lock
 from threading import Timer
 import log
 import pymysql
+from pymysql import DatabaseError
 
 # Interface description
 KHOME_AGENT_INTERFACE = {
@@ -152,11 +153,18 @@ class Module(AgentObject):
         # Load/init module name
         if 'name' not in self.config:
             self.config['name'] = self.id
-            if storage_client:
-                cursor = storage_start()
-                if cursor.execute("SELECT name FROM modules WHERE nid=%s AND mal=%s", (self.nid, self.id)):
-                    self.config['name'] = cursor.fetchall()[0][0]
-                storage_stop(cursor)
+            cursor = storage_open()
+            if cursor:
+                try:
+                    if cursor.execute("SELECT name FROM modules WHERE nid=%s AND mal=%s", (self.nid, self.id)):
+                        self.config['name'] = cursor.fetchall()[0][0]
+                except DatabaseError as err:
+                    log.warning("Cannot load Module name for %s %s." % (str(self), str(err)))
+                finally:
+                    storage_close(cursor)
+
+    def __str__(self):
+        return "[%s]%s" % (self.nid, self.id)
 
     @staticmethod
     def extract_id(cfg) -> str:
@@ -176,7 +184,7 @@ class ModuleError(Exception):
         self.mal = mal
 
     def __str__(self):
-        return "There is no [%s]%s module in inventory" % (self.nid, self.mal)
+        return "There is no %s module in inventory" % str(self)
 
 
 class Bridge(AgentObject):
@@ -207,6 +215,9 @@ class Node(AgentObject):
         self.modules = {}                           # Modules installed on the Node
         self.session = NodeSession(self)            # session of interconnection with the Node
         self.is_alive = False                       # Node is in the net
+
+    def __str__(self):
+        return "[%s]" % self.id
 
     def alive(self, is_alive: bool=True):
         """ Note the latest time when Agent was alive. """
@@ -273,7 +284,7 @@ class NodeError(Exception):
         self.nid = nid
 
     def __str__(self):
-        return "There is no [%s] node in inventory" % self.nid
+        return "There is no %s node in inventory" % str(self)
 
 
 class NodeSession(object):
@@ -339,39 +350,49 @@ class NodeSession(object):
             self.stop(TIMEOUT_RESPONSE)
 
 
-# Actors - Units processing data came from Agents
+# Actors
 
 class Actor(DBObject):
+    """ Units processing data came from Agents. """
     def __init__(self, cfg, db_id: str):
         super().__init__(cfg, db_id)
         self.active = bool(self.config['active']) if 'active' in self.config else True
         self.box = Box(self, self.config['data']['box']) if 'box' in self.config['data'] else None
 
+    def __str__(self):
+        return "%s#%s" % (self.config['type'].capitalize(), self.id)
+
     def store_db(self):
         """ Store config in DB. """
-        if storage_client:
+        cursor = storage_open()
+        if cursor:
             try:
-                cursor = storage_start()
                 if self.id and int(self.id) > 0:    # -id is a temp Actors have not been saved in Storage (was down)
                     cursor.execute("UPDATE actors SET config=%s WHERE id=%s", (str(self.get_cfg(True)), self.id))
                 else:
                     cursor.execute("INSERT INTO actors (config) VALUES (%s)", str(self.get_cfg(True)))
                     self.set_id(str(cursor.lastrowid))
-                storage_client.commit()
-                storage_stop(cursor)
-            except pymysql.DatabaseError as err:
-                log.warning("Cannot store Actor in Storage %s" % err)
+                    storage_save()
+            except DatabaseError as err:
+                log.warning("Cannot store %s in Storage %s." % (str(self), str(err)))
+            finally:
+                storage_close(cursor)
         else:
             if not self.id:
                 self.set_id(str(-id(self)))     # init Actor with a temporary id
 
     def delete_db(self):
         """ Delete config from DB. """
-        if storage_client and self.id:
-            cursor = storage_start()
-            cursor.execute("DELETE FROM actors WHERE id=%s", self.id)
-            storage_client.commit()
-            storage_stop(cursor)
+        if self.id:
+            cursor = storage_open()
+            if cursor:
+                try:
+                    cursor.execute("DELETE FROM actors WHERE id=%s", self.id)
+                    storage_save()
+                except DatabaseError as err:
+                    log.warning("Cannot delete %s from Storage %s." % (str(self), str(err)))
+                finally:
+                    storage_close(cursor)
 
     def set_active(self, status: bool):
         self.active = status
@@ -418,7 +439,7 @@ class Handler(Actor):
         elif data_src in inv.actors:
             # source - another Actor
             return inv.actors[data_src].get_box_key()
-        return BOXKEY_NOSRC     # maybe this source has not been loaded yet (see correct_box_key())
+        return BOXKEY_NOSRC     # maybe this source has not been loaded yet (see load_actors_finalize())
 
     def get_handler_key(self):
         return Box.box_key(
@@ -436,63 +457,97 @@ class Generator(Actor):
 
 # Storage
 
-storage_client = None
-storage_lock = Lock()
+__storage_client = None
+__storage_lock = Lock()
 
 
 def storage_init(server_address):
-    global storage_client
-    if storage_client:
-        storage_client.close()
-    storage_client = pymysql.connect(host=server_address, user='khome', passwd='khome', db='khome')
+    global __storage_client
+    if __storage_client:
+        __storage_client.close()
+    __storage_client = pymysql.connect(host=server_address, user='khome', passwd='khome', db='khome')
 
 
-def storage_start() -> pymysql.cursors.Cursor:
-    storage_lock.acquire()
-    return storage_client.cursor()
+def storage_open() -> pymysql.cursors.Cursor:
+    if __storage_client:
+        cursor = __storage_client.cursor()
+        if cursor:
+            __storage_lock.acquire()
+            return cursor
+    return None
 
 
-def storage_stop(cursor: pymysql.cursors.Cursor):
-    cursor.close()
-    storage_lock.release()
+def storage_close(cursor: pymysql.cursors.Cursor):
+    if cursor:
+        cursor.close()
+        __storage_lock.release()
+
+
+def storage_save():
+    if __storage_client:
+        __storage_client.commit()
 
 
 def load_actors() -> dict:
     result = {}
-    if storage_client:
-        cursor = storage_start()
+    cursor = storage_open()
+    if cursor:
         if cursor.execute("SELECT id, config FROM actors ORDER BY id"):
             result = {row[0]: row[1] for row in cursor}
-        storage_stop(cursor)
+        storage_close(cursor)
     return result
 
 
-def store_module(module: Module) -> bool:
+def load_actors_finalize():
+    """
+    If the Box is hosted under Actor which source is another Actor which has not been loaded yet
+    then this Box would be tied to BOXKEY_NOSRC.
+    After all Actors are loaded the system tries to re-assign all such Boxed to correct keys.
+    """
     try:
-        if storage_client:
-            cursor = storage_start()
+        # Try to find sources to the "pending" Handlers
+        boxes_wo_src = inv.boxes[BOXKEY_NOSRC].copy()
+        inv.boxes[BOXKEY_NOSRC] = []
+        for box in boxes_wo_src:
+            inv.register_box(box)
+        # Wipe Handlers without a source from Inventory
+        for actor in [box.owner for box in inv.boxes[BOXKEY_NOSRC]]:
+            log.warning(
+                'Actor %s#%s is to be deleted as no source was found for it.' %
+                (actor.config['type'].lower(), actor.id))
+            inv.wipe_actor(actor)
+    except KeyError:
+        pass    # there are no postponed Boxes
+
+
+def store_module(module: Module) -> bool:
+    cursor = storage_open()
+    if cursor:
+        try:
             cursor.execute("INSERT INTO modules (nid, mal, name) VALUES (%s, %s, %s) ON DUPLICATE KEY UPDATE name=%s",
                            (module.nid, module.id, module.config['name'], module.config['name']))
-            storage_client.commit()
-            storage_stop(cursor)
+            storage_save()
             return True
-    except pymysql.DatabaseError as err:
-        log.warning("Cannot store Module in Storage " + str(err))
+        except DatabaseError as err:
+            log.warning("Cannot store Module in Storage %s." % str(err))
+        finally:
+            storage_close(cursor)
     return False
 
 
 def forget_module(module: Module):
-    try:
-        if storage_client:
-            cursor = storage_start()
+    cursor = storage_open()
+    if cursor:
+        try:
             cursor.execute("DELETE FROM modules WHERE nid=%s AND mal=%s", (module.nid, module.id))
-            storage_client.commit()
-            storage_stop(cursor)
-    except pymysql.DatabaseError as err:
-        log.warning("Cannot remove Module from Storage " + str(err))
+            storage_save()
+        except DatabaseError as err:
+            log.warning("Cannot remove Module from Storage %s." % str(err))
+        finally:
+            storage_close(cursor)
 
 
-# Inventory - Carry data objects
+# Inventory
 
 class Inventory(object):
     def __init__(self):
@@ -619,36 +674,16 @@ class Inventory(object):
     def wipe_boxes_by_key(self, key: str):
         del self.boxes[key]
 
-    def correct_box_key(self):
-        """
-        If the Box is hosted under Actor which source is another Actor which has not been loaded yet
-        then this Box would be tied to BOXKEY_NOSRC.
-        After all Actors are loaded the system tries to re-assign all such Boxed to correct keys.
-        """
-        try:
-            # Try to find sources to the "pending" Handlers
-            boxes_wo_src = self.boxes[BOXKEY_NOSRC].copy()
-            self.boxes[BOXKEY_NOSRC] = []
-            for box in boxes_wo_src:
-                self.register_box(box)
-            # Wipe Handlers without a source from Inventory
-            for actor in [box.owner for box in self.boxes[BOXKEY_NOSRC]]:
-                log.warning(
-                    'Actor %s#%s is to be deleted as no source was found for it.' %
-                    (actor.config['type'].lower(), actor.id))
-                self.wipe_actor(actor)
-        except KeyError:
-            pass    # there are no postponed Boxes
-
-    def handle_value(self, key, value):
-        if key in self.handlers:
-            for actor in inv.handlers[key]:
-                # Actor is triggered if it is active
-                if actor.active:
-                    actor.process_signal(value)
-                # try to process Actor Box by handlers(actors) referring to this Actor
-                if actor.box:
-                    self.handle_value(actor.id, actor.box.value)
-
 # Inventory instance
 inv = Inventory()
+
+
+def handle_value(key, value):
+    if key in inv.handlers:
+        for actor in inv.handlers[key]:
+            # Actor is triggered if it is active
+            if actor.active:
+                actor.process_signal(value)
+            # try to process Actor Box by handlers(actors) referring to this Actor
+            if actor.box:
+                handle_value(actor.id, actor.box.value)

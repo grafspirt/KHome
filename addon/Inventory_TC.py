@@ -1,5 +1,5 @@
 import unittest
-from inventory import inv
+from inventory import *
 from manager import create_actor
 
 
@@ -75,7 +75,7 @@ class MyTestCase(unittest.TestCase):
         self.assert_('depth' in actor.config['data'])           # shall have 'depth' param
         self.assert_(actor.box in inv.boxes['I23456/TEMP'])     # shall have box
 
-    def test14_addActorLog(self):
+    def test14_addActorLogdb(self):
         actor = create_actor(
             {"type": "logdb", "data": {"src": "3", "period": "10"}},
             '4')
@@ -100,7 +100,7 @@ class MyTestCase(unittest.TestCase):
         self.assertIsNotNone(actor)
 
     def test21_processActorResend(self):
-        inv.handle_value('I23456/IR', "20df8976")
+        handle_value('I23456/IR', "20df8976")
         self.assertEquals(inv.nodes['J23456'].session.request, '3')
 
     def test98_wipeBox(self):

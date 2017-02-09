@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from pymysql import DatabaseError
 from urllib.parse import urlencode
 import http.client as http_client
 import bus
@@ -75,6 +74,20 @@ class ActorLog(Handler):
     def log(self, sig):
         pass
 
+    @staticmethod
+    def to_string(sig) -> str:
+        # Prepare value
+        if isinstance(sig, dict):
+            # Sort sub-values by key
+            str_value = ""
+            for key in sorted(sig):
+                str_value += ',"%s":"%s"' % (key, sig[key])
+            return '{' + str_value[1:] + '}'
+        elif isinstance(sig, str):
+            return sig
+        else:
+            return '{"unknown-value-type":}'
+
 
 class Resend(ActorWithMapping):
     """ Resending source data to another Module. """
@@ -133,24 +146,18 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
 class LogDB(ActorLog):
     """ Log source data to DB. """
     def log(self, sig):
-        if storage_client:
-            if isinstance(sig, dict):
-                str_value = ""
-                for key in sorted(sig):
-                    str_value += ',"%s":"%s"' % (key, sig[key])
-                str_value = '{' + str_value[1:] + '}'
-            elif isinstance(sig, str):
-                str_value = sig
-            else:
-                str_value = '{"unknown-value-type":}'
-
-            cursor = storage_client.cursor()
-            cursor.execute(
-                "INSERT INTO sens_data (sensor, value) VALUES (%s, %s)",
-                (self.get_box_key(), str_value)
-            )
-            storage_client.commit()
-            cursor.close()
+        # Store value
+        cursor = storage_open()
+        if cursor:
+            try:
+                cursor.execute(
+                    "INSERT INTO sens_data (sensor, value) VALUES (%s, %s)",
+                    (self.get_box_key(), ActorLog.to_string(sig)))
+                storage_save()
+            except DatabaseError:
+                pass
+            finally:
+                storage_close(cursor)
 
 
 class Average(Handler):
@@ -212,7 +219,7 @@ class EventJob(Job):
         self.value = value              # value which is scheduled by this Job
 
     def process(self):
-        inv.handle_value(self.handler, self.value)
+        handle_value(self.handler, self.value)
 
 
 class IntervalEventJob(Job):
@@ -386,8 +393,8 @@ def handle_node_data(nid: str, data):
                     node = inv.nodes[nid]
                     for module_cfg in gpio_data['gpio']:
                         inv.register_module(node, module_cfg)
-                    log.info('Modules of Node [%s] have been uploaded to Inventory: %s' %
-                             (nid, str(["%s (%s)" % (
+                    log.info('Modules of Node %s have been uploaded to Inventory: %s' %
+                             (str(node), str(["%s (%s)" % (
                                  node.modules[m].get_cfg()['a'],
                                  node.modules[m].get_cfg()['name']) for m in node.modules])))
                 except KeyError:
@@ -411,7 +418,7 @@ def handle_module_data(nid: str, mal: str, data):
             # store signal in the Module Box
             module.box.value = data
             # find/trigger right handler
-            inv.handle_value(
+            handle_value(
                 module.get_box_key(),
                 module.box.value)
     except KeyError:
@@ -742,11 +749,11 @@ def start(server_address='localhost'):
     try:
         # Storage
         storage_init(server_address)
-        # Load configuration - Actors to Inventory
+        # Load - Actors to Inventory
         actor_configs = load_actors()
         for aid in actor_configs:
             inv.register_actor(create_actor(actor_configs[aid], aid))
-        inv.correct_box_key()
+        load_actors_finalize()
         log.info('Configuration has been loaded from Storage.')
     except DatabaseError as err:
         log.error('Cannot init Storage %s.' % err)

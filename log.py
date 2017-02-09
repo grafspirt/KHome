@@ -1,18 +1,49 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+__logfile = ''
+
+
+def init(logfile: str = ''):
+    global __logfile
+    __logfile = logfile
+
+
+def out(message):
+    # Prepare
+    from time import ctime
+    message = str(ctime()) + ' ' + message
+    # Print
+    if __logfile:
+        try:
+            f = open(__logfile, 'a')
+        except FileNotFoundError:
+            f = open(__logfile, 'w')
+        f.write(message + '\n')
+        f.close()
+    else:
+        print(message)
+
 
 def error(message):
-    print('<!ERROR!> %s' % message)
+    out('<!ERROR!> %s' % message)
 
 
 def warning(message):
-    print('<-WARN-> %s' % message)
+    out('<-WARN-> %s' % message)
 
 
 def info(message):
-    print('<+INFO+> %s' % message)
+    out('<+INFO+> %s' % message)
 
 
 def debug(message):
-    print('<~DEBUG~> %s' % message)
+    out('<~DEBUG~> %s' % message)
+
+
+def bus_income(topic, message):
+    out('>>[%s]>> %s' % (topic, message))
+
+
+def bus_outcome(topic, message):
+    out('<<[%s]<< %s' % (topic, message))

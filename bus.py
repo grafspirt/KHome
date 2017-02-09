@@ -3,8 +3,8 @@
 
 import paho.mqtt.client as mqtt
 import json
-import time
 from threading import Thread
+import log
 
 __mqtt_broker = None          # MQTT client
 __on_connect_handler = None   # external handler for a connection event
@@ -40,7 +40,9 @@ def on_connect_mqtt(client, userdata, flags, rc):
 
 def on_message_mqtt(client, userdata, msg: mqtt.MQTTMessage):
     message = msg.payload.decode('utf-8')
-    print('[%s] >>[%s]>> %s' % (str(time.ctime()), msg.topic, message))
+    # Log
+    if '/manager' not in msg.topic:
+        log.bus_income(msg.topic, message)
     # Processing in a separate thread
     message = prepare_module_message(message)
     process_message = Thread(target=__on_message_handler, args=(msg.topic, message))
@@ -57,11 +59,12 @@ def send(topic: str, message, to_esp8266=False) -> str:
     """
     to_send = message if isinstance(message, str) else json.dumps(message)
     to_send = to_send if not to_esp8266 else to_send.replace('"', '').replace(' ', '')
-
-    print('[%s] <<[%s]<< %s' % (str(time.ctime()), topic, to_send))
+    # Log
+    if '/manager' not in topic:
+        log.bus_outcome(topic, to_send)
+    # Send
     if __mqtt_broker:
         __mqtt_broker.publish(topic, to_send)
-
     return to_send
 
 

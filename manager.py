@@ -744,7 +744,10 @@ def create_actor(cfg, aid=''):
 
 
 def start(server_address='localhost'):
-    log.info('Starting with a Server on %s host.' % server_address)
+    # Init log
+    if server_address == 'localhost':
+        log.init('/var/log/khome.log')  # for Linux-server mode
+    log.info('Starting with a Server on %s.' % server_address)
     # Configuration
     try:
         # Storage

@@ -509,7 +509,7 @@ def load_actors_finalize():
         boxes_wo_src = inv.boxes[BOXKEY_NOSRC].copy()
         inv.boxes[BOXKEY_NOSRC] = []
         for box in boxes_wo_src:
-            inv.register_box(box)
+            inv._register_box(box)
         # Wipe Handlers without a source from Inventory
         for actor in [box.owner for box in inv.boxes[BOXKEY_NOSRC]]:
             log.warning(
@@ -583,7 +583,7 @@ class Inventory(object):
         else:
             return None
 
-    def register_actor(self, actor) -> Actor:
+    def register_actor(self, actor: Actor) -> Actor:
         """
         Append the Actor to the Manager registry.
         :rtype: Actor
@@ -592,20 +592,20 @@ class Inventory(object):
             # add Actor to Actors list
             self.actors[actor.id] = actor
             # add Actor as a handler to Handlers list
-            self.register_handler(actor)
+            self._register_handler(actor)
             # add Actor Box to Boxes list
             if actor.box:
-                self.register_box(actor.box)
+                self._register_box(actor.box)
             # note that the structure was updated
             self.changed()
         return actor
 
-    def wipe_actor(self, actor):
+    def wipe_actor(self, actor: Actor):
         # del Actor Box from Boxes list
         if actor.box:
-            self.wipe_box(actor.box)
+            self._wipe_box(actor.box)
         # del Actor-handler from Handlers list
-        self.wipe_handler(actor)
+        self._wipe_handler(actor)
         # del Actor from Actors list
         del self.actors[actor.id]
         # del Actor from Storage
@@ -613,12 +613,12 @@ class Inventory(object):
         # note that the structure was updated
         self.changed()
 
-    def register_module(self, node: Node, module_cfg: dict, added: bool = False) -> Module:
+    def register_module(self, node: Node, module_cfg, added: bool = False) -> Module:
         new_module = node.add_module(module_cfg)
         if new_module:
             self.changed()
             # add Module Box to Manager Box list
-            self.register_box(new_module.box)
+            self._register_box(new_module.box)
             # Store Module data in Storage
             if added:
                 store_module(new_module)
@@ -631,13 +631,13 @@ class Inventory(object):
             if node.del_module(mal):
                 self.changed()
                 # remove Module Box from Manager Box list
-                self.wipe_boxes_by_key(Box.box_key(node.id, mal))
+                self._wipe_boxes_by_key(Box.box_key(node.id, mal))
                 return True
         except KeyError:
             pass
         return False
 
-    def register_handler(self, handler):
+    def _register_handler(self, handler):
         """
         Register the handler (Actor) which is to process signals from [Node]Module or other Actor in chain.
         :param handler: object of handler (Actor) to be registered
@@ -650,12 +650,12 @@ class Inventory(object):
             except KeyError:
                 self.handlers[handler_key] = [handler]
 
-    def wipe_handler(self, handler):
+    def _wipe_handler(self, handler):
         if issubclass(handler.__class__, Handler):
             handler_key = handler.get_handler_key()
             self.handlers[handler_key].remove(handler)
 
-    def register_box(self, box: Box):
+    def _register_box(self, box: Box):
         """
         Add Box object to the Manager Box list using the key based on nid/mal got from an Actor.
         :param box: object of Register to be added
@@ -667,11 +667,11 @@ class Inventory(object):
         except KeyError:
             self.boxes[key] = [box]
 
-    def wipe_box(self, box: Box):
+    def _wipe_box(self, box: Box):
         key = box.owner.get_box_key()
         self.boxes[key].remove(box)
 
-    def wipe_boxes_by_key(self, key: str):
+    def _wipe_boxes_by_key(self, key: str):
         del self.boxes[key]
 
 # Inventory instance

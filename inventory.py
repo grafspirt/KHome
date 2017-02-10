@@ -406,7 +406,6 @@ class Actor(DBObject):
         """
         Process action related to actor and signal.
         :param sig: Signal - a message got from the [Node]Module
-        :return: nothing
         """
         pass
 
@@ -436,9 +435,9 @@ class Handler(Actor):
         if 'src_mdl' in data:
             # source - Module
             return Box.box_key(data_src, data['src_mdl'])
-        elif data_src in inv.actors:
+        elif data_src in actors:
             # source - another Actor
-            return inv.actors[data_src].get_box_key()
+            return actors[data_src].get_box_key()
         return BOXKEY_NOSRC     # maybe this source has not been loaded yet (see load_actors_finalize())
 
     def get_handler_key(self):
@@ -506,15 +505,15 @@ def load_actors_finalize():
     """
     try:
         # Try to find sources to the "pending" Handlers by registering again
-        boxes_wo_src = inv.boxes[BOXKEY_NOSRC].copy()
-        inv.boxes[BOXKEY_NOSRC] = {}
+        boxes_wo_src = boxes[BOXKEY_NOSRC].copy()
+        boxes[BOXKEY_NOSRC] = {}
         for box_name in boxes_wo_src:
-            inv.register_box(boxes_wo_src[box_name])
+            __register_box(boxes_wo_src[box_name])
         # Wipe Handlers without a source from Inventory
-        for actor in [inv.boxes[BOXKEY_NOSRC][box_name].owner for box_name in inv.boxes[BOXKEY_NOSRC]]:
+        for actor in [boxes[BOXKEY_NOSRC][box_name].owner for box_name in boxes[BOXKEY_NOSRC]]:
             log.warning(
                 'Actor %s is to be deleted as no source was found for it.' % actor)
-            inv.wipe_actor(actor)
+            wipe_actor(actor)
     except KeyError:
         pass    # there are no postponed Boxes
 
@@ -548,145 +547,147 @@ def forget_module(module: Module):
 
 # Inventory
 
-class Inventory(object):
-    def __init__(self):
-        # version of KHome inventory
-        self.revision = 0
-        # Nodes registered in KHome
-        self.nodes = {}     # type: {Node}
-        # Actors processing data from Modules
-        self.actors = {}    # type: {Actor}
-        # Actors processing data from a related Module/Actor
-        self.handlers = {}  # type: {[Module,Actor]}
-        # Objects storing data of Modules/Actors
-        self.boxes = {}     # type: {[Box]}
+revision = 0    # version of KHome inventory
+nodes = {}      # Nodes registered in KHome
+actors = {}     # Actors processing data from Modules
+handlers = {}   # Actors processing data from a related Module/Actor
+boxes = {}      # Objects storing data of Modules/Actors
 
-    def changed(self):
-        """ Mark that some changes in inventory have been made. """
-        self.revision += 1
 
-    def register_node(self, node_cfg):
-        """
-        Create and append Node to Manager node list.
-        Node object is created/updated every time Hello message is received from an Agent.
-        :return: Added Node or None if it exists
-        :rtype: Node
-        """
-        # Parse config as a temp Node
-        new_node = Node(node_cfg)
-        # Store the new one
-        if new_node.id not in self.nodes:
-            self.nodes[new_node.id] = new_node
-            self.changed()
-            return new_node
-        else:
-            return None
+def changed():
+    """ Mark that some changes in inventory have been made. """
+    global revision
+    revision += 1
 
-    def register_actor(self, actor: Actor) -> Actor:
-        """
-        Append the Actor to the Manager registry.
-        :rtype: Actor
-        """
-        if actor:
-            # add Actor to Actors list
-            self.actors[actor.id] = actor
-            # add Actor as a handler to Handlers list
-            self._register_handler(actor)
-            # add Actor Box to Boxes list
-            if actor.box:
-                self.register_box(actor.box)
-            # note that the structure was updated
-            self.changed()
-        return actor
 
-    def wipe_actor(self, actor: Actor):
-        # del Actor Box from Boxes list
+def register_node(node_cfg):
+    """
+    Create and append Node to Manager node list.
+    Node object is created/updated every time Hello message is received from an Agent.
+    :return: Added Node or None if it exists
+    :rtype: Node
+    """
+    # Parse config as a temp Node
+    new_node = Node(node_cfg)
+    # Store the new one
+    if new_node.id not in nodes:
+        nodes[new_node.id] = new_node
+        changed()
+        return new_node
+    else:
+        return None
+
+
+def register_module(node: Node, module_cfg, added: bool = False) -> Module:
+    new_module = node.add_module(module_cfg)
+    if new_module:
+        changed()
+        # add Module Box to Manager Box list
+        __register_box(new_module.box)
+        # Store Module data in Storage
+        if added:
+            store_module(new_module)
+    return new_module
+
+
+def register_actor(actor: Actor) -> Actor:
+    """
+    Append the Actor to the Manager registry.
+    :rtype: Actor
+    """
+    if actor:
+        # add Actor to Actors list
+        actors[actor.id] = actor
+        # add Actor as a handler to Handlers list
+        __register_handler(actor)
+        # add Actor Box to Boxes list
         if actor.box:
-            self._wipe_box(actor.box)
-        # del Actor-handler from Handlers list
-        self._wipe_handler(actor)
-        # del Actor from Actors list
-        del self.actors[actor.id]
-        # del Actor from Storage
-        actor.delete_db()
+            __register_box(actor.box)
         # note that the structure was updated
-        self.changed()
+        changed()
+    return actor
 
-    def register_module(self, node: Node, module_cfg, added: bool = False) -> Module:
-        new_module = node.add_module(module_cfg)
-        if new_module:
-            self.changed()
-            # add Module Box to Manager Box list
-            self.register_box(new_module.box)
-            # Store Module data in Storage
-            if added:
-                store_module(new_module)
-        return new_module
 
-    def wipe_module(self, node: Node, mal: str) -> bool:
+def __register_box(box: Box):
+    """
+    Add Box object to the Manager Box list using the key based on nid/mal got from box owner.
+    :param box: Box to be registered
+    """
+    key = box.owner.get_box_key()
+    try:
+        boxes[key][box.name] = box
+    except KeyError:
+        boxes[key] = {}
+        boxes[key][box.name] = box
+
+
+def __register_handler(handler):
+    """
+    Register the handler (Actor) which is to process signals from [Node]Module or other Actor in chain.
+    :param handler: object of handler (Actor) to be registered
+    :return: nothing
+    """
+    if issubclass(handler.__class__, Handler):
+        handler_key = handler.get_handler_key()
         try:
-            module = node.modules[mal]
-            forget_module(module)
-            if node.del_module(mal):
-                self.changed()
-                # remove Module Box from Manager Box list
-                self._wipe_boxes_by_key(Box.box_key(node.id, mal))
-                return True
+            handlers[handler_key].append(handler)
         except KeyError:
-            pass
-        return False
+            handlers[handler_key] = [handler]
 
-    def _register_handler(self, handler):
-        """
-        Register the handler (Actor) which is to process signals from [Node]Module or other Actor in chain.
-        :param handler: object of handler (Actor) to be registered
-        :return: nothing
-        """
-        if issubclass(handler.__class__, Handler):
-            handler_key = handler.get_handler_key()
-            try:
-                self.handlers[handler_key].append(handler)
-            except KeyError:
-                self.handlers[handler_key] = [handler]
 
-    def _wipe_handler(self, handler):
-        if issubclass(handler.__class__, Handler):
-            handler_key = handler.get_handler_key()
-            self.handlers[handler_key].remove(handler)
+def wipe_module(node: Node, mal: str) -> bool:
+    try:
+        module = node.modules[mal]
+        forget_module(module)
+        if node.del_module(mal):
+            changed()
+            # remove Module Box from Manager Box list
+            __wipe_boxes_by_key(Box.box_key(node.id, mal))
+            return True
+    except KeyError:
+        pass
+    return False
 
-    def register_box(self, box: Box):
-        """
-        Add Box object to the Manager Box list using the key based on nid/mal got from box owner.
-        :param box: Box to be registered
-        """
-        key = box.owner.get_box_key()
-        try:
-            self.boxes[key][box.name] = box
-        except KeyError:
-            self.boxes[key] = {}
-            self.boxes[key][box.name] = box
 
-    def _wipe_box(self, box: Box):
-        """
-        Wipe Box from Manager Box list.
-        :param box: Box to be wiped.
-        """
-        del self.boxes[box.owner.get_box_key()][box.name]
+def wipe_actor(actor: Actor):
+    # del Actor Box from Boxes list
+    if actor.box:
+        __wipe_box(actor.box)
+    # del Actor-handler from Handlers list
+    __wipe_handler(actor)
+    # del Actor from Actors list
+    del actors[actor.id]
+    # del Actor from Storage
+    actor.delete_db()
+    # note that the structure was updated
+    changed()
 
-    def _wipe_boxes_by_key(self, key: str):
-        """
-        Wipe set of Boxes tied to one box key.
-        :param key: Box key to be wiped with all boxes tied to.
-        """
-        del self.boxes[key]
 
-# Inventory instance
-inv = Inventory()
+def __wipe_handler(handler):
+    if issubclass(handler.__class__, Handler):
+        handler_key = handler.get_handler_key()
+        handlers[handler_key].remove(handler)
+
+
+def __wipe_box(box: Box):
+    """
+    Wipe Box from Manager Box list.
+    :param box: Box to be wiped.
+    """
+    del boxes[box.owner.get_box_key()][box.name]
+
+
+def __wipe_boxes_by_key(key: str):
+    """
+    Wipe set of Boxes tied to one box key.
+    :param key: Box key to be wiped with all boxes tied to.
+    """
+    del boxes[key]
 
 
 def handle_value(key, value):
-    if key in inv.handlers:
-        for actor in inv.handlers[key]:
+    if key in handlers:
+        for actor in handlers[key]:
             # Actor is triggered if it is active
             if actor.active:
                 actor.process_signal(value)

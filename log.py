@@ -9,12 +9,12 @@ def init(logfile: str = ''):
     __logfile = logfile
 
 
-def out(message):
+def out(message, interchange: bool = False):
     # Prepare
     from time import ctime
     message = str(ctime()) + ' ' + message
     # Print
-    if __logfile:
+    if __logfile and not interchange:
         try:
             f = open(__logfile, 'a')
         except FileNotFoundError:
@@ -42,8 +42,8 @@ def debug(message):
 
 
 def bus_income(topic, message):
-    out('>>[%s]>> %s' % (topic, message))
+    out('>>[%s]>> %s' % (topic, message), True)
 
 
 def bus_outcome(topic, message):
-    out('<<[%s]<< %s' % (topic, message))
+    out('<<[%s]<< %s' % (topic, message), True)

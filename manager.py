@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import json
 from urllib.parse import urlencode
 import http.client as http_client
 import bus
-from inventory import *
+import inventory as inv
 from scheduler import *
+import log
+from pymysql import DatabaseError
 
 
 # Actors and Jobs
 
-class ActorWithMapping(Handler):
+class ActorWithMapping(inv.Handler):
     """ Actor using mapping data in config. """
-    class MapUnit(DBObject):
+    class MapUnit(inv.DBObject):
         """ Object used as mapping record in ActorWithMapping configuration. """
         def __init__(self, cfg):
             super().__init__(cfg, cfg['in'])
@@ -53,7 +56,7 @@ class ActorWithMapping(Handler):
             del self.mapping[map_id]
 
 
-class ActorLog(Handler):
+class ActorLog(inv.Handler):
     """
     Actor logging source data with a period defined in ticks.
     The logging action [self.log(sig)] is defined in child classes.
@@ -147,20 +150,20 @@ class LogDB(ActorLog):
     """ Log source data to DB. """
     def log(self, sig):
         # Store value
-        cursor = storage_open()
+        cursor = inv.storage_open()
         if cursor:
             try:
                 cursor.execute(
                     "INSERT INTO sens_data (sensor, value) VALUES (%s, %s)",
                     (self.get_box_key(), ActorLog.to_string(sig)))
-                storage_save()
+                inv.storage_save()
             except DatabaseError:
                 pass
             finally:
-                storage_close(cursor)
+                inv.storage_close(cursor)
 
 
-class Average(Handler):
+class Average(inv.Handler):
     """ Averages values on some period, defined by 'depth' parameter. """
     def __new__(cls, cfg, db_id):
         # Box is mandatory for Average actors
@@ -219,7 +222,7 @@ class EventJob(Job):
         self.value = value              # value which is scheduled by this Job
 
     def process(self):
-        handle_value(self.handler, self.value)
+        inv.handle_value(self.handler, self.value)
 
 
 class IntervalEventJob(Job):
@@ -265,7 +268,7 @@ class IntervalEventJob(Job):
         sch.jobs_to_schedule.append(self)
 
 
-class Schedule(Generator):
+class Schedule(inv.Generator):
     """ Actor managing Scheduler job and acts as a data source for Handlers. """
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)
@@ -299,7 +302,7 @@ class Schedule(Generator):
 def on_connect_to_bus():
     # Ask all Agents for configs
     bus.send(
-        "/config/" + ALL_MODULES,
+        "/config/" + inv.ALL_MODULES,
         "i!",
         True)
 
@@ -347,7 +350,7 @@ def on_message_from_bus(topic, message):
 
 # Interaction ---
 
-def send_signal_to_module(module: Module, data, north_request: dict = None):
+def send_signal_to_module(module: inv.Module, data, north_request: dict = None):
     return inv.nodes[module.nid].session.start(
         bus.send(
             '/signal/%s/%s' % (module.nid, module.id),
@@ -356,7 +359,7 @@ def send_signal_to_module(module: Module, data, north_request: dict = None):
         north_request)
 
 
-def send_config_to_node(node: Node, config, north_request: dict = None):
+def send_config_to_node(node: inv.Node, config, north_request: dict = None):
     return node.session.start(
         bus.send(
             '/config/%s' % node.id,
@@ -418,7 +421,7 @@ def handle_module_data(nid: str, mal: str, data):
             # store signal in the Module Box
             module.box.value = data
             # find/trigger right handler
-            handle_value(
+            inv.handle_value(
                 module.get_box_key(),
                 module.box.value)
     except KeyError:
@@ -427,7 +430,7 @@ def handle_module_data(nid: str, mal: str, data):
 
 def handle_agent_response(coordinates: list, response) -> bool:
     try:
-        node = inv.nodes[coordinates[2]]    # type: Node
+        node = inv.nodes[coordinates[2]]    # type: inv.Node
         node.alive()
         if node.session.active:
             node.session.stop(response)
@@ -444,7 +447,7 @@ def is_agent_response_success(response) -> bool:
     :param response: response come from Agent
     :return: True if response is not NACK
     """
-    return not(isinstance(response, dict) and KHOME_AGENT_INTERFACE['negative'] in response)
+    return not(isinstance(response, dict) and inv.KHOME_AGENT_INTERFACE['negative'] in response)
 
 
 # Handling North ---
@@ -486,12 +489,12 @@ def process_request(message):
         #         answer = '{"ack": "%d"}' % inv.actors[params['actor']].process_request(request_type, params)
         #     except KeyError:
         #         pass
-    except (TypeError, ModuleError, NodeError) as err:
-        answer = {KHOME_AGENT_INTERFACE['negative']: str(err)}
+    except (TypeError, inv.ModuleError, inv.NodeError) as err:
+        answer = {inv.KHOME_AGENT_INTERFACE['negative']: str(err)}
     except KeyError as err:
-        answer = {KHOME_AGENT_INTERFACE['negative']: "Key %s is absent in the request" % err}
-    except pymysql.DatabaseError:
-        answer = {KHOME_AGENT_INTERFACE['negative']: "There are problems in DB"}
+        answer = {inv.KHOME_AGENT_INTERFACE['negative']: "Key %s is absent in the request" % err}
+    except DatabaseError:
+        answer = {inv.KHOME_AGENT_INTERFACE['negative']: "There are problems in DB"}
     finally:
         # Answer with the same session id
         answer_north(sid, answer)
@@ -505,7 +508,7 @@ def request_manage_structure(request: dict) -> dict:
         # Export the whole structure
         return {
             'revision': inv.revision,
-            'module-types': KHOME_AGENT_INTERFACE['module_types'],
+            'module-types': inv.KHOME_AGENT_INTERFACE['module_types'],
             'nodes': [inv.nodes[node_id].get_cfg() for node_id in inv.nodes],
             'actors': [inv.actors[act_id].get_cfg() for act_id in inv.actors]}
 
@@ -537,7 +540,7 @@ def request_manage_ping(request: dict) -> dict:
     try:
         return send_config_to_node(inv.nodes[nid], {"ping": ""}, request)
     except KeyError:
-        raise NodeError(nid)
+        raise inv.NodeError(nid)
 
 
 def request_manage_signal(request: dict) -> dict:
@@ -555,7 +558,7 @@ def request_manage_signal(request: dict) -> dict:
         response = send_signal_to_module(inv.nodes[nid].modules[mal], val, request)
         return {"ack": response} if is_agent_response_success(response) else response
     except KeyError:
-        raise ModuleError(nid, mal)
+        raise inv.ModuleError(nid, mal)
 
 
 def request_manage_modules(request: dict) -> dict:
@@ -563,11 +566,11 @@ def request_manage_modules(request: dict) -> dict:
     params_in = request['params']
     # Get target node
     try:
-        node = inv.nodes[params_in['node']]   # type: Node
+        node = inv.nodes[params_in['node']]   # type: inv.Node
     except KeyError:
-        raise NodeError(params_in['node'])
+        raise inv.NodeError(params_in['node'])
     # Initiate
-    response = {KHOME_AGENT_INTERFACE['negative']: "Nothing to update"}
+    response = {inv.KHOME_AGENT_INTERFACE['negative']: "Nothing to update"}
     gpio_result = []
     # Do the job
     if request['request'] == 'add-module':
@@ -579,9 +582,9 @@ def request_manage_modules(request: dict) -> dict:
         # prepare
         gpio_to_add = []
         for updated_cfg in gpio_from_request:
-            if updated_cfg['p'] not in KHOME_AGENT_INTERFACE['pins_available']['esp8266']:  # pin is in hardware scope
+            if updated_cfg['p'] not in inv.KHOME_AGENT_INTERFACE['pins_available']['esp8266']:  # pin is in hardware
                 continue
-            if updated_cfg['t'] not in KHOME_AGENT_INTERFACE['module_types']:   # type is in inventory scope
+            if updated_cfg['t'] not in inv.KHOME_AGENT_INTERFACE['module_types']:   # type is in inventory scope
                 continue
             if updated_cfg['p'] in node.get_pins_used():     # pin is in use
                 continue
@@ -594,7 +597,7 @@ def request_manage_modules(request: dict) -> dict:
             # upload
             response = send_config_to_node(
                 node,
-                Node.get_gpio(gpio_result),
+                inv.Node.get_gpio(gpio_result),
                 request)
             # sync up
             if is_agent_response_success(response):
@@ -611,7 +614,7 @@ def request_manage_modules(request: dict) -> dict:
             # upload
             response = send_config_to_node(
                 node,
-                Node.get_gpio(gpio_result),
+                inv.Node.get_gpio(gpio_result),
                 request)
             # sync up
             if is_agent_response_success(response):
@@ -629,16 +632,16 @@ def request_manage_modules(request: dict) -> dict:
         for updated_cfg in gpio_from_request:
             try:
                 mal = updated_cfg['a']
-                module = node.modules[mal]  # type: Module
+                module = node.modules[mal]  # type: inv.Module
                 # Update Module name
                 if 'name' in updated_cfg:
                     if module.config['name'] != updated_cfg['name']:
                         module.config['name'] = updated_cfg['name']
-                        store_module(module)
+                        inv.store_module(module)
                 # Update Module cfg
                 is_gpio_updated = False
                 existing_cfg = module.get_cfg()
-                for entity in KHOME_AGENT_INTERFACE['gpio']:
+                for entity in inv.KHOME_AGENT_INTERFACE['gpio']:
                     if entity in updated_cfg and entity != 'a':
                         existing_cfg[entity] = updated_cfg[entity]
                         is_gpio_updated = True
@@ -656,7 +659,7 @@ def request_manage_modules(request: dict) -> dict:
         # upload
         response = send_config_to_node(
             node,
-            Node.get_gpio(gpio_result),
+            inv.Node.get_gpio(gpio_result),
             request)
         # sync up
         if is_agent_response_success(response):
@@ -678,7 +681,7 @@ def request_manage_actors(request: dict) -> dict:
     # Mandatory params
     params_in = request['params']
     # Initiate
-    response = {KHOME_AGENT_INTERFACE['negative']: "Nothing to update"}
+    response = {inv.KHOME_AGENT_INTERFACE['negative']: "Nothing to update"}
     count = 0
     # Do the job
     if request['request'] == 'add-actor':
@@ -702,7 +705,7 @@ def request_manage_actors(request: dict) -> dict:
         aid = data_from_request['id']
         # Update
         if aid in inv.actors:
-            actor = inv.actors[aid]     # type: Actor
+            actor = inv.actors[aid]     # type: inv.Actor
             for item in data_from_request:
                 if item != 'id':
                     actor.config['data'][item] = data_from_request[item]
@@ -730,7 +733,7 @@ def create_actor(cfg, aid=''):
     :rtype: Actor
     """
     # init config
-    cfg_obj = Actor.get_cfg_dict(cfg)
+    cfg_obj = inv.Actor.get_cfg_dict(cfg)
     # prepare globals
     globals_lower = {k.lower(): d for k, d in globals().items()}
     # instantiate object
@@ -751,12 +754,12 @@ def start(server_address='localhost'):
     # Configuration
     try:
         # Storage
-        storage_init(server_address)
+        inv.storage_init(server_address)
         # Load - Actors to Inventory
-        actor_configs = load_actors()
+        actor_configs = inv.load_actors()
         for aid in actor_configs:
             inv.register_actor(create_actor(actor_configs[aid], aid))
-        load_actors_finalize()
+            inv.load_actors_finalize()
         log.info('Configuration has been loaded from Storage.')
     except DatabaseError as err:
         log.error('Cannot init Storage %s.' % err)

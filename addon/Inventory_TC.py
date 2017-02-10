@@ -1,12 +1,12 @@
 import unittest
-from inventory import *
+import inventory as inv
 from manager import create_actor
 
 
-class MyTestCase(unittest.TestCase):
+class InventoryTestCases(unittest.TestCase):
     def test01_addNode(self):
         prev_rev = inv.revision
-        node = inv.register_node({"id": "I23456", "ver": "1", "inf": {"ip":"192.168.0.201","rssi":"-77"}})
+        node = inv.register_node({"id": "I23456", "ver": "1", "inf": {"ip": "192.168.0.201", "rssi": "-77"}})
         self.assertIsNotNone(node)
         self.assertEquals(node.id, "I23456")
         self.assertEquals(inv.nodes['I23456'], node)
@@ -131,15 +131,15 @@ class MyTestCase(unittest.TestCase):
             '333')
         self.assertIsNotNone(actor)
         self.assertEquals(inv.register_actor(actor), actor)
-        self.assertIn('DeadAvenger', inv.boxes[BOXKEY_NOSRC])
+        self.assertIn('DeadAvenger', inv.boxes[inv.BOXKEY_NOSRC])
         self.assertIn('333', inv.actors)
-        self.assertIn('Avenger', inv.boxes[BOXKEY_NOSRC])
-        load_actors_finalize()
+        self.assertIn('Avenger', inv.boxes[inv.BOXKEY_NOSRC])
+        inv.load_actors_finalize()
         self.assertIn('Avenger', inv.boxes[inv.actors['3'].get_box_key()])
         self.assertNotIn('333', inv.actors)
 
     def test21_processActorResend(self):
-        handle_value('I23456/IR', "20df8976")
+        inv.handle_value('I23456/IR', "20df8976")
         self.assertEquals(inv.nodes['J23456'].session.request, '3')
 
     def test98_wipeActor(self):

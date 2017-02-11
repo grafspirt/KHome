@@ -10,6 +10,39 @@ from actors import create_actor
 import json
 
 
+# Initiation ---
+
+def start(server_address='localhost'):
+    # Init log
+    log.init('/var/log/khome.log' if server_address == 'localhost' else '')
+    log.info('Starting with a Server on %s.' % server_address)
+    # Configuration
+    try:
+        # Storage
+        inv.storage_init(server_address)
+        # Load - Actors to Inventory
+        actor_configs = inv.load_actors()
+        for aid in actor_configs:
+            inv.register_actor(create_actor(actor_configs[aid], aid))
+            inv.load_actors_finalize()
+        log.info('Configuration has been loaded from Storage.')
+    except StorageError as err:
+        log.error('Cannot init Storage %s.' % err)
+    # Bus and Scheduler
+    try:
+        # Bus
+        bus.init(server_address, on_connect_to_bus, on_message_from_bus)
+        log.info('Connected to Bus.')
+        # Scheduler
+        sch.init_timer()
+        log.info('Scheduler has been started.')
+        # Start
+        bus.listen()
+    except (ConnectionRefusedError, TimeoutError) as err:
+        log.error('Cannot connect to Bus (%s).' % err)
+        log.info('KHome manager stops with failure.')
+
+
 # Bus ISR ---
 
 def on_connect_to_bus():
@@ -406,36 +439,3 @@ def request_manage_actors(request: dict) -> dict:
         inv.changed()
         response = {"ack": "1"}
     return response
-
-
-# Initiation ---
-
-def start(server_address='localhost'):
-    # Init log
-    log.init('/var/log/khome.log' if server_address == 'localhost' else '')
-    log.info('Starting with a Server on %s.' % server_address)
-    # Configuration
-    try:
-        # Storage
-        inv.storage_init(server_address)
-        # Load - Actors to Inventory
-        actor_configs = inv.load_actors()
-        for aid in actor_configs:
-            inv.register_actor(create_actor(actor_configs[aid], aid))
-            inv.load_actors_finalize()
-        log.info('Configuration has been loaded from Storage.')
-    except StorageError as err:
-        log.error('Cannot init Storage %s.' % err)
-    # Bus and Scheduler
-    try:
-        # Bus
-        bus.init(server_address, on_connect_to_bus, on_message_from_bus)
-        log.info('Connected to Bus.')
-        # Scheduler
-        sch.init_timer()
-        log.info('Scheduler has been started.')
-        # Start
-        bus.listen()
-    except (ConnectionRefusedError, TimeoutError) as err:
-        log.error('Cannot connect to Bus (%s).' % err)
-        log.info('KHome manager stops with failure.')

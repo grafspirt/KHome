@@ -10,6 +10,8 @@ import http.client as http_client
 import json
 
 
+# Factory
+
 def create_actor(cfg, aid=''):
     """
     Actors instantiation function.
@@ -30,6 +32,8 @@ def create_actor(cfg, aid=''):
         log.warning('Actor class "%s" is not found for configuration: %s' % (cfg_obj['type'], json.dumps(cfg_obj)))
         return None
 
+
+# Classes
 
 class ActorWithMapping(inv.Handler):
     """ Actor using mapping data in config. """

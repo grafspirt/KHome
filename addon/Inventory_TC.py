@@ -1,6 +1,6 @@
 import unittest
 import inventory as inv
-from manager import create_actor
+from actors import create_actor
 
 
 class InventoryTestCases(unittest.TestCase):

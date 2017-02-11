@@ -7,6 +7,28 @@ from inventory import DatabaseError as StorageError
 import scheduler as sch
 from urllib.parse import urlencode
 import http.client as http_client
+import json
+
+
+def create_actor(cfg, aid=''):
+    """
+    Actors instantiation function.
+    :type cfg: Actor config str or dict.
+    :type aid: (optional) Actor id
+    :rtype: Actor
+    """
+    # init config
+    cfg_obj = inv.Actor.get_cfg_dict(cfg)
+    # prepare globals
+    globals_lower = {k.lower(): d for k, d in globals().items()}
+    # instantiate object
+    try:
+        return globals_lower[cfg_obj['type'].lower()](
+            cfg_obj,
+            str(aid))
+    except KeyError:
+        log.warning('Actor class "%s" is not found for configuration: %s' % (cfg_obj['type'], json.dumps(cfg_obj)))
+        return None
 
 
 class ActorWithMapping(inv.Handler):

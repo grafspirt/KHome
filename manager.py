@@ -6,9 +6,9 @@ from urllib.parse import urlencode
 import http.client as http_client
 import bus
 import inventory as inv
-from scheduler import *
+from inventory import DatabaseError as StorageError
+import scheduler as sch
 import log
-from pymysql import DatabaseError
 
 
 # Actors and Jobs
@@ -157,7 +157,7 @@ class LogDB(ActorLog):
                     "INSERT INTO sens_data (sensor, value) VALUES (%s, %s)",
                     (self.get_box_key(), ActorLog.to_string(sig)))
                 inv.storage_save()
-            except DatabaseError:
+            except StorageError:
                 pass
             finally:
                 inv.storage_close(cursor)
@@ -208,66 +208,6 @@ class Average(inv.Handler):
             self.box.value = self.__calc('.', sig)
 
 
-class EventJob(Job):
-    """
-    Job which is performed once (in a period) at a time defined by time template.
-    Value is processed by Performer.
-    E.g.:
-    start_time = ****:**:**:01:00 means the Job is performed every 01:00 once a day
-    start_time = ****:**:05:01:00 means the Job is performed every the 5th day of a month at 01:00
-    """
-    def __init__(self, handler: str, value, start_time: ScheduleTime):
-        super().__init__(handler)
-        self.start_time = start_time    # the time which this Job shall start at
-        self.value = value              # value which is scheduled by this Job
-
-    def process(self):
-        inv.handle_value(self.handler, self.value)
-
-
-class IntervalEventJob(Job):
-    """
-    Maintain job configurations (EventJob factory)
-    supposing same actions performed with a period within some time interval.
-    'period' - period of action to be triggered within time interval
-    'start' - begin of time interval
-    'stop' - end of time interval
-    """
-    def __init__(self, handler: str, cfg: dict):
-        super().__init__(handler)
-        self.config = cfg
-
-    def schedule(self):
-        start_template = ScheduleTime(self.config['start'])
-        stop_template = ScheduleTime(self.config['stop'])
-        period_template = ScheduleTime(self.config['period'])
-        period_delta = period_template.get_timedelta()
-        # shift start time to the next interval if stop time has been passed already
-        start_time = start_template.get_datetime(int(not stop_template > datetime.datetime.now()))
-        # shift stop time to the next period if the stop time is less than start time
-        stop_time = stop_template.get_datetime(int(stop_template < start_time), start_time)
-
-        # Schedule EventJobs for the calculated period
-        while stop_time >= start_time:
-            EventJob(
-                self.handler,
-                self.config['value'],
-                start_time
-            ).schedule()
-            start_time += period_delta
-
-        # Schedule this interval job to stop_time in order to re-schedule it again
-        self.start_time = stop_time
-        super().schedule()
-
-    def process(self):
-        """ Reschedule jobs from corresponding interval again. """
-        # ask Scheduler to clean job list from obsolete event jobs related to this interval job (Scheduler.process)
-        sch.clean_timetable = True
-        # ask Scheduler to re-schedule this interval job
-        sch.jobs_to_schedule.append(self)
-
-
 class Schedule(inv.Generator):
     """ Actor managing Scheduler job and acts as a data source for Handlers. """
     def __init__(self, cfg, db_id):
@@ -279,13 +219,13 @@ class Schedule(inv.Generator):
         for job_cfg in self.config['data']['jobs']:
             try:
                 if 'event' in job_cfg:  # job on time - event
-                    EventJob(
+                    sch.EventJob(
                         self.id,
                         job_cfg['value'],
-                        ScheduleTime(job_cfg['event'])
+                        sch.JobTime(job_cfg['event'])
                     ).schedule()
                 elif 'period' in job_cfg:  # job within a period - period
-                    IntervalEventJob(
+                    sch.IntervalEventJob(
                         self.id,
                         job_cfg
                     ).schedule()
@@ -493,7 +433,7 @@ def process_request(message):
         answer = {inv.KHOME_AGENT_INTERFACE['negative']: str(err)}
     except KeyError as err:
         answer = {inv.KHOME_AGENT_INTERFACE['negative']: "Key %s is absent in the request" % err}
-    except DatabaseError:
+    except StorageError:
         answer = {inv.KHOME_AGENT_INTERFACE['negative']: "There are problems in DB"}
     finally:
         # Answer with the same session id
@@ -514,10 +454,11 @@ def request_manage_structure(request: dict) -> dict:
 
 
 def request_manage_timetable() -> dict:
+    """ Get all EventJobs registered in the Scheduler timetable. """
     timetable = []
     for time_key in sorted(sch.timetable):
         for job in sch.timetable[time_key]:
-            if isinstance(job, EventJob):
+            if isinstance(job, sch.EventJob):
                 timetable.append({"time": str(job.start_time), "signal": job.value, "handler": job.handler})
     return {"timetable": timetable}
 
@@ -748,8 +689,7 @@ def create_actor(cfg, aid=''):
 
 def start(server_address='localhost'):
     # Init log
-    if server_address == 'localhost':
-        log.init('/var/log/khome.log')  # for Linux-server mode
+    log.init('/var/log/khome.log' if server_address == 'localhost' else '')
     log.info('Starting with a Server on %s.' % server_address)
     # Configuration
     try:
@@ -761,7 +701,7 @@ def start(server_address='localhost'):
             inv.register_actor(create_actor(actor_configs[aid], aid))
             inv.load_actors_finalize()
         log.info('Configuration has been loaded from Storage.')
-    except DatabaseError as err:
+    except StorageError as err:
         log.error('Cannot init Storage %s.' % err)
     # Bus and Scheduler
     try:

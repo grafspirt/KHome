@@ -10,7 +10,8 @@ from daemon import Daemon
 import sys
 
 
-class KDaemon(Daemon):
+class KHomeDaemon(Daemon):
+    """ Daemon starting KHome server as daemon in Linux OS. """
     def run(self):
         return manager.start()
 
@@ -23,17 +24,18 @@ class KDaemon(Daemon):
 
 if __name__ == "__main__":
     if len(sys.argv) == 2:
-        daemon = KDaemon("/var/run/KHome.pid", 'KHome server')
-        if sys.argv[1] == 'start':
+        daemon = KHomeDaemon('/var/run/KHome.pid', 'KHome server')
+        command = sys.argv[1]
+        if command == 'start':
             daemon.start()
-        elif sys.argv[1] == 'stop':
+        elif command == 'stop':
             daemon.stop()
-        elif sys.argv[1] == 'restart':
+        elif command == 'restart':
             daemon.restart()
-        elif sys.argv[1] == 'status':
+        elif command == 'status':
             daemon.status()
         else:
-            print("Unknown command %s. Please use one of the following: {start|stop|restart|status}" % sys.argv[1])
+            print('Unknown command "%s". Please use the following: {start|stop|restart|status}' % command)
             sys.exit(2)
 
         sys.exit(0)

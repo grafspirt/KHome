@@ -5,9 +5,10 @@ import time
 import datetime
 import re
 from threading import Timer
+import inventory as inv
 
 
-class ScheduleTime(object):
+class JobTime(object):
     """
     Replicates Actor time templates.
     String source: [[[YYYY:]MM:]DD:]hh:]mm[.ss]
@@ -172,103 +173,172 @@ class Job(object):
     def schedule(self):
         """ Schedule this job. """
         if self.start_time:
-            sch.add_job(self)
+            add_job(self)
 
     def process(self):
         pass
 
 
+class EventJob(Job):
+    """
+    Job which is performed once (in a period) at a time defined by time template.
+    Value is processed by Performer.
+    E.g.:
+    start_time = ****:**:**:01:00 means the Job is performed every 01:00 once a day
+    start_time = ****:**:05:01:00 means the Job is performed every the 5th day of a month at 01:00
+    """
+    def __init__(self, handler: str, value, start_time: JobTime):
+        super().__init__(handler)
+        self.start_time = start_time    # the time which this Job shall start at
+        self.value = value              # value which is scheduled by this Job
+
+    def process(self):
+        inv.handle_value(self.handler, self.value)
+
+
+class IntervalEventJob(Job):
+    """
+    Maintain job configurations (EventJob factory)
+    supposing same actions performed with a period within some time interval.
+    'period' - period of action to be triggered within time interval
+    'start' - begin of time interval
+    'stop' - end of time interval
+    """
+    def __init__(self, handler: str, cfg: dict):
+        super().__init__(handler)
+        self.config = cfg
+
+    def schedule(self):
+        """ Schedule (instantiate) a row of jobs related to the Interval. """
+        start_template = JobTime(self.config['start'])
+        stop_template = JobTime(self.config['stop'])
+        period_template = JobTime(self.config['period'])
+        period_delta = period_template.get_timedelta()
+        # shift start time to the next interval if stop time has been passed already
+        start_time = start_template.get_datetime(int(not stop_template > datetime.datetime.now()))
+        # shift stop time to the next period if the stop time is less than start time
+        stop_time = stop_template.get_datetime(int(stop_template < start_time), start_time)
+
+        # Schedule EventJobs for the calculated period
+        while stop_time >= start_time:
+            EventJob(
+                self.handler,
+                self.config['value'],
+                start_time
+            ).schedule()
+            start_time += period_delta
+
+        # Schedule this interval job to stop_time in order to re-schedule it again
+        self.start_time = stop_time
+        super().schedule()
+
+    def process(self):
+        """ Reschedule jobs from corresponding interval again. """
+        # ask Scheduler to clean job list from obsolete event jobs related to this interval job (Scheduler.process)
+        global clean_timetable
+        clean_timetable = True
+        # ask Scheduler to re-schedule this interval job
+        global jobs_to_reschedule
+        jobs_to_reschedule.append(self)
+
+
 # Scheduler - Manage job objects
 
-class Scheduler(object):
-    def __init__(self):
-        self.timetable = {}             # scheduled jobs list. Structure: [time_minutes] -> list of time_seconds
-        self.jobs_to_schedule = []      # list of jobs to be rescheduled
-        self.clean_timetable = False    # necessity of timetable cleaning from obsolete jobs
+timetable = {}             # scheduled jobs list. Structure: [time_minutes] -> list of time_seconds
+jobs_to_reschedule = []    # list of jobs to be rescheduled
+clean_timetable = False    # necessity of timetable cleaning from obsolete jobs
 
-    @staticmethod
-    def init_timer():
-        """ Init the timer which is used by Scheduler. """
-        Scheduler.on_timer()
 
-    @staticmethod
-    def on_timer():
-        now = time.localtime()
-        Timer(60 - now.tm_sec, Scheduler.on_timer).start()
-        sch.process('%d:%02d:%02d:%02d:%02d' %
-                    (now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min),
-                    now.tm_sec)
+def init_timer():
+    """ Init the timer which is used by Scheduler. """
+    on_timer()
 
-    def add_job(self, job: Job) -> str:
-        # calc key
-        time_cell = ''
-        dt_object = job.start_time
-        if dt_object.minute > -1:
-            time_cell = '%02d' % dt_object.minute + time_cell
-        if dt_object.hour > -1:
-            time_cell = '%02d' % dt_object.hour + ':' + time_cell
-        if dt_object.day > -1:
-            time_cell = '%02d' % dt_object.day + ':' + time_cell
-        if dt_object.month > -1:
-            time_cell = '%02d' % dt_object.month + ':' + time_cell
-        if dt_object.year > -1:
-            time_cell = str(dt_object.year) + ':' + time_cell
-        # register job to yhe key
-        try:
-            self.timetable[time_cell].append(job)
-        except KeyError:
-            self.timetable[time_cell] = [job]
-        return time_cell
 
-    def clean(self):
-        """ Clean Timetable from all obsolete and empty time cells. """
-        now = datetime.datetime.now()
-        to_wipe = []
-        # collect obsolete jobs to be wiped out
-        for time_cell in self.timetable:
-            value = ScheduleTime(time_cell)
-            if (not value.is_template and not value > now) or (not self.timetable[time_cell]):
-                to_wipe.append(time_cell)
-        # wipe obsolete jobs found out
-        for time_cell in to_wipe:
-            del self.timetable[time_cell]
-        # Reset
-        self.clean_timetable = False
+def on_timer():
+    now = time.localtime()
+    Timer(60 - now.tm_sec, on_timer).start()
+    process(
+        '%d:%02d:%02d:%02d:%02d' % (now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min),
+        now.tm_sec)
 
-    def clear(self, handler: str = '0'):
-        """ Clear Timetable from Jobs related to some Handler or all. """
-        if handler:
-            for time_cell in self.timetable:
-                new_time_cell = [job for job in self.timetable[time_cell] if job.handler != handler]
-                self.timetable[time_cell] = new_time_cell
-            self.clean()    # wipe all empty time cells
-        else:
-            self.timetable = {}
 
-    def process(self, time_now: str, correction_sec: int = 0):
-        """
-        :param time_now: time to the nearest minute
-        :param correction_sec: difference in seconds if the processing is started not in :00
-        :return: nothing
-        """
-        # Check all jobs scheduled - find jobs with time_cell related to the time_now
-        for time_cell in self.timetable:
-            if re.search(time_cell + '$', time_now):
-                # It is time to do all jobs related to this time key
-                for job in self.timetable[time_cell]:
-                    if job.start_time.second:
-                        # wait for item.seconds
-                        Timer(job.start_time.second - correction_sec, job.process).start()
-                    else:
-                        # process value right now
-                        job.process()
-        # Clean jobs list (clean_timetable)
-        if self.clean_timetable:
-            self.clean()
-        # Reschedule jobs (jobs_to_schedule)
-        for job in self.jobs_to_schedule:
-            job.schedule()
-        self.jobs_to_schedule = []
+def add_job(job: Job) -> str:
+    # calc time-key of the job
+    time_cell = ''
+    dt_object = job.start_time
+    if dt_object.minute > -1:
+        time_cell = '%02d' % dt_object.minute + time_cell
+    if dt_object.hour > -1:
+        time_cell = '%02d' % dt_object.hour + ':' + time_cell
+    if dt_object.day > -1:
+        time_cell = '%02d' % dt_object.day + ':' + time_cell
+    if dt_object.month > -1:
+        time_cell = '%02d' % dt_object.month + ':' + time_cell
+    if dt_object.year > -1:
+        time_cell = str(dt_object.year) + ':' + time_cell
+    # register job in the timetable with its time-key
+    global timetable
+    try:
+        timetable[time_cell].append(job)
+    except KeyError:
+        timetable[time_cell] = [job]
+    return time_cell
 
-# Scheduler instance
-sch = Scheduler()
+
+def clean():
+    """ Clean Timetable from all obsolete and empty time cells. """
+    now = datetime.datetime.now()
+    to_wipe = []
+    global timetable
+    # collect obsolete jobs to be wiped out
+    for time_cell in timetable:
+        value = JobTime(time_cell)
+        if (not value.is_template and not value > now) or (not timetable[time_cell]):
+            to_wipe.append(time_cell)
+    # wipe obsolete jobs found out
+    for time_cell in to_wipe:
+        del timetable[time_cell]
+    # Reset
+    global clean_timetable
+    clean_timetable = False
+
+
+def clear(handler: str = '0'):
+    """ Clear Timetable from Jobs related to some Handler or all. """
+    global timetable
+    if handler:
+        for time_cell in timetable:
+            new_time_cell = [job for job in timetable[time_cell] if job.handler != handler]
+            timetable[time_cell] = new_time_cell
+        clean()    # wipe all empty time cells
+    else:
+        timetable = {}
+
+
+def process(time_now: str, correction_sec: int = 0):
+    """
+    :param time_now: time to the nearest minute
+    :param correction_sec: difference in seconds if the processing is started not in :00
+    :return: nothing
+    """
+    global timetable
+    # Check all jobs scheduled - find jobs with time_cell related to the time_now
+    for time_cell in timetable:
+        if re.search(time_cell + '$', time_now):
+            # It is time to do all jobs related to this time key
+            for job in timetable[time_cell]:
+                if job.start_time.second:
+                    # wait for item.seconds
+                    Timer(job.start_time.second - correction_sec, job.process).start()
+                else:
+                    # process value right now
+                    job.process()
+    # Clean jobs list (clean_timetable)
+    global clean_timetable
+    if clean_timetable:
+        clean()
+    # Reschedule jobs (jobs_to_reschedule)
+    global jobs_to_reschedule
+    for job in jobs_to_reschedule:
+        job.schedule()
+    jobs_to_reschedule = []

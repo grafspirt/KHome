@@ -125,6 +125,20 @@ class InventoryTestCases(unittest.TestCase):
         self.assertIn(actor.box.name, inv.boxes['I23456/TEMP'])     # shall have box
         self.assertGreater(inv.revision, prev_rev)
 
+    def test18_addActorIntervaljob(self):
+        actor = create_actor(
+            {"type": "schedule", "data": {"jobs": [
+                {"event": "01:05", "value": "1"},
+                {"event": "01:05.30", "value": "0"},
+                {"period": "0.30", "start": "0", "stop": "5", "value": "3"},
+                {"period": "0.30", "start": "10", "stop": "15", "value": "5"},
+                {"period": "0.30", "start": "20", "stop": "25", "value": "7"},
+                {"period": "0.30", "start": "30", "stop": "35", "value": "9"},
+                {"period": "0.30", "start": "40", "stop": "45", "value": "11"},
+                {"period": "0.30", "start": "50", "stop": "55", "value": "13"}]}},
+            '17')
+        self.assertIsNotNone(actor)
+
     def test20_finalizeActorLoad(self):
         actor = create_actor(
             {"type": "average", "data": {"src": "000", "box": "DeadAvenger"}},

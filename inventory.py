@@ -8,6 +8,7 @@ from threading import Timer
 import log
 import pymysql
 from pymysql import DatabaseError
+import bus
 
 # Interface description
 KHOME_AGENT_INTERFACE = {
@@ -177,6 +178,14 @@ class Module(AgentObject):
     def is_actuator(self):
         return int(self.config['t']) > 50
 
+    def send_signal(self, signal, context_request: dict = None):
+        return nodes[self.nid].session.start(
+            bus.send(
+                '/signal/%s/%s' % (self.nid, self.id),
+                signal,
+                True),
+            context_request)
+
 
 class ModuleError(Exception):
     def __init__(self, nid, mal):
@@ -277,6 +286,14 @@ class Node(AgentObject):
         else:
             alias_result = '???'    # TODO: finish this idea
         return {alias: alias_result}
+
+    def send_config(self, config, context_request: dict = None):
+        return self.session.start(
+            bus.send(
+                '/config/%s' % self.id,
+                config,
+                True),
+            context_request)
 
 
 class NodeError(Exception):

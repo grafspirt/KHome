@@ -19,18 +19,20 @@ def create_actor(cfg, aid=''):
     :type aid: (optional) Actor id
     :rtype: Actor
     """
-    # init config
-    cfg_obj = inv.Actor.get_cfg_dict(cfg)
-    # prepare globals
-    globals_lower = {k.lower(): d for k, d in globals().items()}
-    # instantiate object
     try:
+        # init config
+        cfg_obj = inv.Actor.get_cfg_dict(cfg)
+        # prepare globals
+        globals_lower = {k.lower(): d for k, d in globals().items()}
+        # instantiate object
         return globals_lower[cfg_obj['type'].lower()](
             cfg_obj,
             str(aid))
     except KeyError:
-        log.warning('Actor class "%s" is not found for configuration: %s' % (cfg_obj['type'], json.dumps(cfg_obj)))
-        return None
+        log.warning('Actor is not loaded. Class is not found for: %s.' % cfg)
+    except ValueError:
+        log.warning('Actor is not loaded. Configuration is invalid: %s.' % cfg)
+    return None
 
 
 # Classes

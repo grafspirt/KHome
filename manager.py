@@ -24,7 +24,7 @@ def start(server_address='localhost'):
         actor_configs = inv.load_actors()
         for aid in actor_configs:
             inv.register_actor(create_actor(actor_configs[aid], aid))
-            inv.load_actors_finalize()
+        inv.load_actors_finalize()
         log.info('Configuration has been loaded from Storage.')
     except StorageError as err:
         log.error('Cannot init Storage %s.' % err)
@@ -110,7 +110,7 @@ def handle_node_data(nid: str, data):
         # Ask the Node for Module cfg
         if node:
             gpio_data = node.send_config({"get": "gpio"})
-            if gpio_data:
+            if is_agent_response_success(gpio_data):
                 try:
                     node = inv.nodes[nid]
                     for module_cfg in gpio_data['gpio']:
@@ -389,7 +389,7 @@ def request_manage_modules(request: dict) -> dict:
     if is_agent_response_success(response):
         for mal in node.modules:
             module = node.modules[mal]
-            if module.is_actuator():
+            if module.is_actuator() and module.box.value:
                 module.send_signal(module.box.value)
 
     return response

@@ -48,7 +48,7 @@ def start(server_address='localhost'):
 def on_connect_to_bus():
     # Ask all Agents for configs
     bus.send(
-        "/config/" + inv.ALL_MODULES,
+        '/config/%s' % inv.ALL_MODULES,
         "i!",
         True)
 

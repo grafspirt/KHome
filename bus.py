@@ -17,10 +17,10 @@ def init(server_address, on_connect, on_message):
     __on_connect_handler = on_connect
     __on_message_handler = on_message
 
-    tmp_client = mqtt.Client('KHomes')
+    tmp_client = mqtt.Client('KHome')
     tmp_client.on_connect = on_connect_mqtt
     tmp_client.on_message = on_message_mqtt
-    tmp_client.connect(server_address, 1883, 60)
+    tmp_client.connect(server_address, 1883, 30)
 
     __mqtt_broker = tmp_client
 

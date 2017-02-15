@@ -250,14 +250,24 @@ def request_manage_timetable() -> dict:
 
 
 def request_manage_data(request: dict) -> dict:
+    # Gather Boxes data
     def get_boxes_by_key(__key):
         return {box_name: inv.boxes[__key][box_name].value for box_name in inv.boxes[__key]}
-    # Gather boxes related to the box keys defined in the request or all registered boxes otherwise
+
+    # Gather Nodes alive data
+    def get_alive_by_nid(__nid):
+        node = inv.nodes[__nid]     # type: inv.Node
+        return {"alive": node.is_alive, "LTA": node.last_time_alive}
+
+    # Result
     if 'params' in request:
-        result = {key: get_boxes_by_key(key) for key in request['params']}
+        # Gather boxes with the box keys from the request
+        boxes = {key: get_boxes_by_key(key) for key in request['params']}
+        return {"boxes": boxes}
     else:
-        result = {key: get_boxes_by_key(key) for key in inv.boxes}
-    return {'boxes': result}
+        # Gather all registered boxes + Nodes alive data
+        boxes = {key: get_boxes_by_key(key) for key in inv.boxes}
+        return {"boxes": boxes, "nodes": {nid: get_alive_by_nid(nid) for nid in inv.nodes}}
 
 
 def request_manage_ping(request: dict) -> dict:

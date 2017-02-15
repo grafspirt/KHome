@@ -223,7 +223,8 @@ class Node(AgentObject):
         self.type = 'esp8266'                       # Node hardware type
         self.modules = {}                           # Modules installed on the Node
         self.session = NodeSession(self)            # session of interconnection with the Node
-        self.is_alive = False                       # Node is in the net
+        self.is_alive = False                       # Node alive flag
+        self.last_time_alive = time()               # LTA - Last Time Alive
 
     def __str__(self):
         return "[%s]" % self.id
@@ -231,9 +232,8 @@ class Node(AgentObject):
     def alive(self, is_alive: bool=True):
         """ Note the latest time when Agent was alive. """
         self.is_alive = is_alive
-        self.config['alive'] = is_alive
         if is_alive:
-            self.config['LTA'] = time()  # LTA - Last Time Alive
+            self.last_time_alive = time()  # LTA - Last Time Alive
 
     def add_module(self, module_cfg: dict):
         new_module = Module(module_cfg, self.id)

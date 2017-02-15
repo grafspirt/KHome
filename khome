@@ -40,5 +40,5 @@ if __name__ == "__main__":
 
         sys.exit(0)
     else:
-        manager.start('192.168.0.13')
-        # manager.start('192.168.10.200')
+        # manager.start('192.168.0.13')
+        manager.start('192.168.10.200')

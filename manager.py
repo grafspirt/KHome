@@ -12,7 +12,7 @@ import json
 
 # Initiation ---
 
-def start(server_address='localhost'):
+def start(server_address: str='localhost'):
     # Init log
     log.init('/var/log/khome.log' if server_address == 'localhost' else '')
     log.info('Starting with a Server on %s.' % server_address)
@@ -48,7 +48,7 @@ def start(server_address='localhost'):
 def on_connect_to_bus():
     # Ask all Agents for configs
     bus.send(
-        '/config/%s' % inv.ALL_MODULES,
+        '/config/%s' % inv.MODULES_ALL,
         "i!",
         True)
 
@@ -267,7 +267,7 @@ def request_manage_data(request: dict) -> dict:
     else:
         # Gather all registered boxes + Nodes alive data
         boxes = {key: get_boxes_by_key(key) for key in inv.boxes}
-        return {"boxes": boxes, "nodes": {nid: get_alive_by_nid(nid) for nid in inv.nodes}}
+        return {"boxes": boxes, "nodes-alive": {nid: get_alive_by_nid(nid) for nid in inv.nodes}}
 
 
 def request_manage_ping(request: dict) -> dict:

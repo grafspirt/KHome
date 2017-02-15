@@ -52,7 +52,7 @@ KHOME_AGENT_INTERFACE = {
 # Other
 BOXKEY_NOSRC = '~'
 BOXKEY_SYSTEM = '#'
-ALL_MODULES = '~'
+MODULES_ALL = '~'
 TIMEOUT_RESPONSE = {KHOME_AGENT_INTERFACE['negative']: "timeout"}
 
 
@@ -287,7 +287,7 @@ class Node(AgentObject):
             alias_result = '???'    # TODO: finish this idea
         return {alias: alias_result}
 
-    def send_config(self, config, context_request: dict = None):
+    def send_config(self, config, context_request: dict=None):
         return self.session.start(
             bus.send(
                 '/config/%s' % self.id,
@@ -477,7 +477,7 @@ __storage_client = None
 __storage_lock = Lock()
 
 
-def storage_init(server_address):
+def storage_init(server_address: str):
     global __storage_client
     if __storage_client:
         __storage_client.close()
@@ -595,7 +595,7 @@ def register_node(node_cfg):
         return None
 
 
-def register_module(node: Node, module_cfg, added: bool = False) -> Module:
+def register_module(node: Node, module_cfg, added: bool=False) -> Module:
     new_module = node.add_module(module_cfg)
     if new_module:
         changed()
@@ -694,12 +694,12 @@ def __wipe_box(box: Box):
     del boxes[box.owner.get_box_key()][box.name]
 
 
-def __wipe_boxes_by_key(key: str):
+def __wipe_boxes_by_key(box_key: str):
     """
     Wipe set of Boxes tied to one box key.
-    :param key: Box key to be wiped with all boxes tied to.
+    :param box_key: Box key to be wiped with all boxes tied to.
     """
-    del boxes[key]
+    del boxes[box_key]
 
 
 def handle_value(key, value):

@@ -154,7 +154,11 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
                 except KeyError:
                     pass
         else:
-            data_to_send['field1'] = sig    # default field
+            try:
+                single_field = self.config['data']['out']
+            except KeyError:
+                single_field = 'field1'     # default field
+            data_to_send[single_field] = sig
 
         # send
         connection = http_client.HTTPConnection("api.thingspeak.com:80")

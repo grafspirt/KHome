@@ -136,13 +136,7 @@ def handle_module_data(nid: str, mal: str, data):
     try:
         # if it is not NACK
         if is_agent_response_success(data):
-            module = inv.nodes[nid].modules[mal]
-            # store signal in the Module Box
-            module.box.value = data
-            # find/trigger right handler
-            inv.handle_value(
-                module.get_box_key(),
-                module.box.value)
+            inv.nodes[nid].modules[mal].handle_data(data)
     except KeyError:
         pass
 

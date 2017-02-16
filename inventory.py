@@ -186,6 +186,25 @@ class Module(AgentObject):
                 True),
             context_request)
 
+    def handle_data(self, data):
+        # Alive check
+        if 'prd' in self.config:
+            self.periodical_alive_check()
+        # Data processing
+        self.box.value = data
+        handle_value(self.get_box_key(), data)
+
+    def periodical_alive_check(self):
+        try:
+            period = float(self.config['prd'])
+            node = nodes[self.nid]
+            if time() - node.last_time_alive > period:
+                node.alive(False)
+            else:
+                Timer(period, self.periodical_alive_check).start()
+        except ValueError:
+            pass
+
 
 class ModuleError(Exception):
     def __init__(self, nid, mal):

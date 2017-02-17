@@ -187,9 +187,7 @@ class Module(AgentObject):
             context_request)
 
     def handle_data(self, data):
-        # Alive check
-        if 'prd' in self.config:
-            self.periodical_alive_check()
+        self.periodical_alive_check()
         # Data processing
         self.box.value = data
         handle_value(self.get_box_key(), data)
@@ -202,7 +200,8 @@ class Module(AgentObject):
                 node.alive(False)
             else:
                 Timer(period, self.periodical_alive_check).start()
-        except ValueError:
+        except (KeyError, ValueError):
+            # there is no period value or it is incorrect
             pass
 
 

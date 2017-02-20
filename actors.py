@@ -90,7 +90,7 @@ class ActorLog(inv.Handler):
         # period
         self.count = 0
         if 'period' not in self.config['data']:
-            self.config['data']['period'] = 5
+            self.config['data']['period'] = 1   # default value - every time to log
 
     def process_signal(self, sig):
         self.count += 1
@@ -146,6 +146,7 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
             return None
 
     def log(self, sig):
+        # Prepare
         data_to_send = {'key': self.config['data']['key']}
         if isinstance(sig, dict):
             for alias in sig:
@@ -159,15 +160,17 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
             except KeyError:
                 single_field = 'field1'     # default field
             data_to_send[single_field] = sig
-
-        # send
+        # Send
         connection = http_client.HTTPConnection("api.thingspeak.com:80")
         connection.request(
             "POST",
             "/update",
             urlencode(data_to_send),
             {"Content-type": "application/x-www-form-urlencoded", "Accept": "text/plain"})
-        # response = connection.getresponse()  # response.status, response.reason
+        # Response
+        response = connection.getresponse()  # response.status, response.reason
+        if response.status != 200:
+            log.warning('%s cannot upload data, response: %d "%s"' % (self, response.status, response.reason))
 
 
 class LogDB(ActorLog):

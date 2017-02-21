@@ -50,8 +50,9 @@ KHOME_AGENT_INTERFACE = {
 }
 
 # Other
-BOXKEY_NOSRC = '~'
-BOXKEY_SYSTEM = '#'
+SRCKEY_NOSRC = '~'
+SRCKEY_SYSTEM = '$'
+BOXNAME_MODULE = '@'
 MODULES_ALL = '~'
 TIMEOUT_RESPONSE = {KHOME_AGENT_INTERFACE['negative']: "timeout"}
 
@@ -115,21 +116,21 @@ class DBObject(BaseObject):
         super().__init__(cfg)
         self.set_id(oid)  # ID is stored in DB entity, it should be replicated to config
 
-    def get_cfg(self, for_db=False) -> dict:
-        cfg = super().get_cfg()
-        if for_db:
-            del cfg['id']
-            return json.dumps(cfg)
-        else:
-            return cfg
-
-    def set_id(self, oid: str):
-        """
-        Store an object ID in DB in a corresponding attribute and replicate it to the config.
-        :param oid: Object ID
-        :return: nothing
-        """
-        self.config['id'] = super().set_id(oid)
+    # def get_cfg(self, for_db=False) -> dict:
+    #     cfg = super().get_cfg()
+    #     if for_db:
+    #         del cfg['id']
+    #         return json.dumps(cfg)
+    #     else:
+    #         return cfg
+    #
+    # def set_id(self, oid: str):
+    #     """
+    #     Store an object ID in DB in a corresponding attribute and replicate it to the config.
+    #     :param oid: Object ID
+    #     :return: nothing
+    #     """
+    #     self.config['id'] = super().set_id(oid)
 
     def store_db(self):
         pass
@@ -149,8 +150,8 @@ class Module(AgentObject):
         """
         super().__init__(cfg)
         self.nid = nid
-        # Default Box for the Module
-        self.box = Box(self, self.config['a'])
+        self.src_key = Module.form_src_key(self.nid, self.id)
+        self.box = Box(self, BOXNAME_MODULE)
         # Load/init module name
         if 'name' not in self.config:
             self.config['name'] = self.id
@@ -167,13 +168,21 @@ class Module(AgentObject):
     def __str__(self):
         return "[%s]%s" % (self.nid, self.id)
 
+    def get_cfg(self):
+        cfg = super().get_cfg()
+        cfg['src_key'] = self.src_key
+        return cfg
+
     @staticmethod
     def extract_id(cfg) -> str:
         return cfg['a']
 
-    def get_box_key(self) -> str:
-        """ Get Key of data source - this Module itself. """
-        return Box.box_key(self.nid, self.id)
+    @staticmethod
+    def form_src_key(nid: str, mal: str = '') -> str:
+        if mal:
+            return '%s/%s' % (nid, mal)
+        else:
+            return nid
 
     def is_actuator(self):
         return int(self.config['t']) > 50
@@ -190,7 +199,7 @@ class Module(AgentObject):
         self.periodical_alive_check()
         # Data processing
         self.box.value = data
-        handle_value(self.get_box_key(), data)
+        handle_value(self.src_key, data)
 
     def periodical_alive_check(self):
         try:
@@ -228,10 +237,6 @@ class Box(object):
         self.owner = owner
         self.name = name
         self.value = ''
-
-    @staticmethod
-    def box_key(nid: str, mal: str = '') -> str:
-        return nid + ('/' + mal if mal else '')
 
 
 class Node(AgentObject):
@@ -272,16 +277,12 @@ class Node(AgentObject):
             return False
 
     def get_cfg_modules(self) -> list:
-        result = []
-        for mal in self.modules:
-            cfg = self.modules[mal].get_cfg()
-            result.append(cfg)
-        return result
+        return [self.modules[mal].get_cfg() for mal in self.modules]
 
-    def get_cfg(self):
-        result_cfg = super().get_cfg()
-        result_cfg['gpio'] = self.get_cfg_modules()     # inject gpio config
-        return result_cfg
+    def get_cfg(self) -> dict:
+        cfg = super().get_cfg()
+        cfg['gpio'] = self.get_cfg_modules()     # inject gpio config
+        return cfg
 
     def get_pins_used(self) -> list:
         """ Get the list of all pins used by modules installed. """
@@ -393,9 +394,19 @@ class Actor(DBObject):
         super().__init__(cfg, db_id)
         self.active = bool(self.config['active']) if 'active' in self.config else True
         self.box = Box(self, self.config['data']['box']) if 'box' in self.config['data'] else None
+        self.src_key = ''
 
     def __str__(self):
         return "%s#%s" % (self.config['type'].capitalize(), self.id)
+
+    def set_src_key(self) -> str:
+        return self.src_key
+
+    def get_cfg(self) -> dict:
+        cfg = super().get_cfg()
+        cfg['src_key'] = self.src_key
+        cfg['id'] = self.id
+        return cfg
 
     def store_db(self):
         """ Store config in DB. """
@@ -403,9 +414,9 @@ class Actor(DBObject):
         if cursor:
             try:
                 if self.id and int(self.id) > 0:    # -id is a temp Actors have not been saved in Storage (was down)
-                    cursor.execute("UPDATE actors SET config=%s WHERE id=%s", (str(self.get_cfg(True)), self.id))
+                    cursor.execute("UPDATE actors SET config=%s WHERE id=%s", (json.dumps(self.get_cfg()), self.id))
                 else:
-                    cursor.execute("INSERT INTO actors (config) VALUES (%s)", str(self.get_cfg(True)))
+                    cursor.execute("INSERT INTO actors (config) VALUES (%s)", json.dumps(self.get_cfg()))
                     self.set_id(str(cursor.lastrowid))
                     storage_save()
             except DatabaseError as err:
@@ -433,10 +444,6 @@ class Actor(DBObject):
         self.active = status
         self.config['active'] = status
 
-    def get_box_key(self) -> str:
-        """ Key of Actor data source. """
-        pass
-
     def process_signal(self, sig):
         """
         Process action related to actor and signal.
@@ -445,7 +452,7 @@ class Actor(DBObject):
         pass
 
     def apply_changes(self):
-        """ Method which is to be triggered after the Actor update. """
+        """ Method which is to be triggered after the Actor has been updated. """
         pass
 
 
@@ -463,20 +470,22 @@ class Handler(Actor):
                 (cfg['type'].lower(), db_id))
             return None
 
-    def get_box_key(self) -> str:
-        """ Get Key of data source (Module) started actor chain. """
-        data = self.config['data']
-        data_src = data['src']
-        if 'src_mdl' in data:
+    def set_src_key(self) -> str:
+        """ Get Key of data source (Module) starting a chain of Actors. """
+        data_src = self.config['data']['src']
+        if 'src_mdl' in self.config['data']:
             # source - Module
-            return Box.box_key(data_src, data['src_mdl'])
+            self.src_key = Module.form_src_key(data_src, self.config['data']['src_mdl'])
         elif data_src in actors:
             # source - another Actor
-            return actors[data_src].get_box_key()
-        return BOXKEY_NOSRC     # maybe this source has not been loaded yet (see load_actors_finalize())
+            self.src_key = actors[data_src].set_src_key()
+        else:
+            # source - unknown (could not been loaded yet - see load_actors_stop())
+            self.src_key = SRCKEY_NOSRC
+        return self.src_key
 
     def get_handler_key(self):
-        return Box.box_key(
+        return Module.form_src_key(
             self.config['data']['src'],
             self.config['data']['src_mdl'] if 'src_mdl' in self.config['data'] else '')
 
@@ -485,8 +494,9 @@ class Generator(Actor):
     """
     Actor data source is a system.
     """
-    def get_box_key(self):
-        return BOXKEY_SYSTEM
+    def set_src_key(self) -> str:
+        self.src_key = SRCKEY_SYSTEM
+        return self.src_key
 
 
 # Storage
@@ -522,7 +532,7 @@ def storage_save():
         __storage_client.commit()
 
 
-def load_actors() -> dict:
+def load_actors_start() -> dict:
     result = {}
     cursor = storage_open()
     if cursor:
@@ -532,23 +542,28 @@ def load_actors() -> dict:
     return result
 
 
-def load_actors_finalize():
+def load_actors_stop():
     """
     If the Box is hosted under Actor which source is another Actor which has not been loaded yet
-    then this Box would be tied to BOXKEY_NOSRC.
+    then this Box would be tied to SRCKEY_NOSRC.
     After all Actors are loaded the system tries to re-assign all such Boxed to correct keys.
     """
     try:
-        # Try to find sources to the "pending" Handlers by registering again
-        boxes_wo_src = boxes[BOXKEY_NOSRC].copy()
-        boxes[BOXKEY_NOSRC] = {}
-        for box_name in boxes_wo_src:
-            __register_box(boxes_wo_src[box_name])
-        # Wipe Handlers without a source from Inventory
-        for actor in [boxes[BOXKEY_NOSRC][box_name].owner for box_name in boxes[BOXKEY_NOSRC]]:
-            log.warning(
-                'Actor %s is to be deleted as no source was found for it.' % actor)
-            wipe_actor(actor)
+        aids_to_remove = []
+        # Re-set Source Key for all Actors
+        for aid in actors:
+            actor = actors[aid]     # type: Actor
+            if actor.src_key == SRCKEY_NOSRC:
+                if actor.set_src_key() == SRCKEY_NOSRC:
+                    log.warning('Actor %s is to be deleted as no source was found for it.' % actor)
+                    aids_to_remove.append(aid)
+                elif actor.box:
+                    # Re-register Actor Box using new source key
+                    __register_box(actor.box)
+        # Wipe source-less Actors and Boxes
+        for aid in aids_to_remove:
+            wipe_actor(actors[aid])
+        del boxes[SRCKEY_NOSRC]
     except KeyError:
         pass    # there are no postponed Boxes
 
@@ -633,6 +648,7 @@ def register_actor(actor: Actor) -> Actor:
     if actor:
         # add Actor to Actors list
         actors[actor.id] = actor
+        actor.set_src_key()
         # add Actor as a handler to Handlers list
         __register_handler(actor)
         # add Actor Box to Boxes list
@@ -648,7 +664,7 @@ def __register_box(box: Box):
     Add Box object to the Manager Box list using the key based on nid/mal got from box owner.
     :param box: Box to be registered
     """
-    key = box.owner.get_box_key()
+    key = box.owner.src_key
     try:
         boxes[key][box.name] = box
     except KeyError:
@@ -675,9 +691,8 @@ def wipe_module(node: Node, mal: str) -> bool:
         module = node.modules[mal]
         forget_module(module)
         if node.del_module(mal):
+            __wipe_boxes_by_key(module.src_key)
             changed()
-            # remove Module Box from Manager Box list
-            __wipe_boxes_by_key(Box.box_key(node.id, mal))
             return True
     except KeyError:
         pass
@@ -709,7 +724,7 @@ def __wipe_box(box: Box):
     Wipe Box from Manager Box list.
     :param box: Box to be wiped.
     """
-    del boxes[box.owner.get_box_key()][box.name]
+    del boxes[box.owner.src_key][box.name]
 
 
 def __wipe_boxes_by_key(box_key: str):

@@ -21,10 +21,10 @@ def start(server_address: str='localhost'):
         # Storage
         inv.storage_init(server_address)
         # Load - Actors to Inventory
-        actor_configs = inv.load_actors()
+        actor_configs = inv.load_actors_start()
         for aid in actor_configs:
             inv.register_actor(create_actor(actor_configs[aid], aid))
-        inv.load_actors_finalize()
+        inv.load_actors_stop()
         log.info('Configuration has been loaded from Storage.')
     except StorageError as err:
         log.error('Cannot init Storage %s.' % err)
@@ -221,16 +221,18 @@ def answer_north(sid: str, message):
 
 
 def request_manage_structure(request: dict) -> dict:
-    if 'params' in request and 'revision' in request['params'] and inv.revision == int(request['params']['revision']):
-        # Export revision number only as nothing has been changed
-        return {'revision': inv.revision}
-    else:
-        # Export the whole structure
-        return {
-            'revision': inv.revision,
-            'module-types': inv.KHOME_AGENT_INTERFACE['module_types'],
-            'nodes': [inv.nodes[node_id].get_cfg() for node_id in inv.nodes],
-            'actors': [inv.actors[act_id].get_cfg() for act_id in inv.actors]}
+    try:
+        if str(inv.revision) == request['params']['revision']:
+            # Nothing has been changed - export revision number only
+            return {'revision': str(inv.revision)}
+    except KeyError:
+        pass
+    # Export the whole structure otherwise
+    return {
+        'revision': inv.revision,
+        'module-types': inv.KHOME_AGENT_INTERFACE['module_types'],
+        'nodes': [inv.nodes[node_id].get_cfg() for node_id in inv.nodes],
+        'actors': [inv.actors[act_id].get_cfg() for act_id in inv.actors]}
 
 
 def request_manage_timetable() -> dict:

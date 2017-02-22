@@ -89,10 +89,6 @@ def on_message_from_bus(topic, message):
         bus.send(
             "/error",
             "Wrong request format in topic [%s]: %s" % (topic, message))
-    # except ValueError:
-    #     bus.send(
-    #         "/error",
-    #         "Request is not a JSON in topic [%s]: %s" % (topic, message))
 
 
 # Handling South ---

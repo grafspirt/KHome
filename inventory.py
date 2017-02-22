@@ -253,6 +253,8 @@ class Node(ConfigObject):
         self.is_alive = is_alive
         if is_alive:
             self.last_time_alive = time()  # LTA - Last Time Alive
+        else:
+            log.warning('Node %s has been lost.' % self)
 
     def add_module(self, module_cfg: dict):
         new_module = Module(module_cfg, self.id)

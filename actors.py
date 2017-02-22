@@ -101,20 +101,20 @@ class ActorLog(inv.Handler):
             self.log(sig)
             self.count = 0
 
-    def log(self, sig):
+    def log(self, signal):
         pass
 
     @staticmethod
-    def to_string(sig) -> str:
+    def to_string(signal) -> str:
         # Prepare value
-        if isinstance(sig, dict):
+        if isinstance(signal, dict):
             # Sort sub-values by key
             str_value = ""
-            for key in sorted(sig):
-                str_value += ',"%s":"%s"' % (key, sig[key])
+            for key in sorted(signal):
+                str_value += ',"%s":"%s"' % (key, signal[key])
             return '{' + str_value[1:] + '}'
-        elif isinstance(sig, str):
-            return sig
+        elif isinstance(signal, str):
+            return signal
         else:
             return '{"unknown-value-type":}'
 
@@ -122,19 +122,25 @@ class ActorLog(inv.Handler):
 class Resend(ActorWithMapping):
     """ Resending source data to another Module. """
     def process_signal(self, signal):
-        # as-is from 1 to 1
+        # Root values
+        out = self.config['data']['out'] if 'out' in self.config['data'] else signal
         try:
-            inv.nodes[self.config['data']['trg']].modules[self.config['data']['trg_mdl']].send_signal(signal)
+            target = {"nid": self.config['data']['trg'], "mal": self.config['data']['trg_mdl']}
         except KeyError:
-            pass
-        # mapping from 1 to N
-        for map_key in self.mapping:
-            cfg = self.mapping[map_key].config
-            try:
-                if cfg['in'] == signal:
-                    inv.nodes[cfg['trg']].modules[cfg['trg_mdl']].send_signal(cfg['out'])
-            except KeyError:
-                pass
+            target = None
+        # Mapping values
+        for map_id in self.mapping:     # type: ActorWithMapping.MapUnit
+            if str(map_id) == str(signal):
+                map_unit_cfg = self.mapping[map_id].config
+                if 'out' in map_unit_cfg:
+                    out = map_unit_cfg['out']
+                try:
+                    target = {"nid": map_unit_cfg['trg'], "mal": map_unit_cfg['trg_mdl']}
+                except KeyError:
+                    pass
+        # Logging
+        if target:
+            inv.nodes[target['nid']].modules[target['mal']].send_signal(out)
 
 
 class LogThingSpeak(ActorWithMapping, ActorLog):
@@ -148,13 +154,13 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
                 (cfg['type'].lower(), db_id))
             return None
 
-    def log(self, sig):
+    def log(self, signal):
         # Prepare
         data_to_send = {'key': self.config['data']['key']}
-        if isinstance(sig, dict):
-            for alias in sig:
+        if isinstance(signal, dict):
+            for alias in signal:
                 try:
-                    data_to_send[self.mapping[alias].config['out']] = sig[alias]
+                    data_to_send[self.mapping[alias].config['out']] = signal[alias]
                 except KeyError:
                     pass
         else:
@@ -162,7 +168,7 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
                 single_field = self.config['data']['out']
             except KeyError:
                 single_field = 'field1'     # default field
-            data_to_send[single_field] = sig
+            data_to_send[single_field] = signal
         # Send
         connection = http_client.HTTPConnection("api.thingspeak.com:80")
         connection.request(
@@ -178,14 +184,14 @@ class LogThingSpeak(ActorWithMapping, ActorLog):
 
 class LogDB(ActorLog):
     """ Log source data to DB. """
-    def log(self, sig):
+    def log(self, signal):
         # Store value
         cursor = inv.storage_open()
         if cursor:
             try:
                 cursor.execute(
                     "INSERT INTO sens_data (sensor, value) VALUES (%s, %s)",
-                    (self.get_box_key(), ActorLog.to_string(sig)))
+                    (self.src_key, ActorLog.to_string(signal)))
                 inv.storage_save()
             except StorageError:
                 pass
@@ -195,21 +201,24 @@ class LogDB(ActorLog):
 
 class LogBus(ActorWithMapping, ActorLog):
     """ Log source data to the bus (with mapping). """
-    def log(self, sig):
-        out = sig
+    def log(self, signal):
+        # Root values
+        out = self.config['data']['out'] if 'out' in self.config['data'] else signal
         try:
             target = self.config['data']['trg']
         except KeyError:
             target = None
-        # Mapping
-        if self.mapping:
-            for map_id in self.mapping:   # type: ActorWithMapping.MapUnit
-                if str(map_id) == str(sig):
-                    map_unit = self.mapping[map_id]
-                    out = map_unit.config['out']
-                    if 'trg' in map_unit.config:
-                        target = map_unit.config['trg']
-        # Posting
+        # Mapping values
+        for map_id in self.mapping:   # type: ActorWithMapping.MapUnit
+            if str(map_id) == str(signal):
+                map_unit_cfg = self.mapping[map_id].config
+                if 'out' in map_unit_cfg:
+                    out = map_unit_cfg['out']
+                try:
+                    target = map_unit_cfg['trg']
+                except KeyError:
+                    pass
+        # Logging
         if target:
             inv.bus.send(target, out)
 

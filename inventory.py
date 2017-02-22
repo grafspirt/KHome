@@ -80,6 +80,9 @@ class BaseObject(object):
         """
         return self.config.copy()
 
+    def get_export(self) -> dict:
+        return self.get_cfg()
+
     @staticmethod
     def get_cfg_dict(cfg) -> dict:
         """
@@ -93,8 +96,8 @@ class BaseObject(object):
             return cfg
 
 
-class AgentObject(BaseObject):
-    """ Prototype of an Agent in the structure. Id is stored in Configuration. """
+class ConfigObject(BaseObject):
+    """ Prototype of an object stored (incl. id) in Configuration. """
     def __init__(self, cfg):
         super().__init__(cfg)
         # config of these object types contains ID, it should be taken from there
@@ -116,21 +119,10 @@ class DBObject(BaseObject):
         super().__init__(cfg)
         self.set_id(oid)  # ID is stored in DB entity, it should be replicated to config
 
-    # def get_cfg(self, for_db=False) -> dict:
-    #     cfg = super().get_cfg()
-    #     if for_db:
-    #         del cfg['id']
-    #         return json.dumps(cfg)
-    #     else:
-    #         return cfg
-    #
-    # def set_id(self, oid: str):
-    #     """
-    #     Store an object ID in DB in a corresponding attribute and replicate it to the config.
-    #     :param oid: Object ID
-    #     :return: nothing
-    #     """
-    #     self.config['id'] = super().set_id(oid)
+    def get_export(self) -> dict:
+        cfg = super().get_export()
+        cfg['id'] = self.id
+        return cfg
 
     def store_db(self):
         pass
@@ -141,7 +133,7 @@ class DBObject(BaseObject):
 
 # Agents - Nodes, Modules and attendant entities
 
-class Module(AgentObject):
+class Module(ConfigObject):
     def __init__(self, cfg, nid):
         """
         :param cfg: Config string/object describing the Module
@@ -168,8 +160,8 @@ class Module(AgentObject):
     def __str__(self):
         return "[%s]%s" % (self.nid, self.id)
 
-    def get_cfg(self):
-        cfg = super().get_cfg()
+    def get_export(self):
+        cfg = super().get_export()
         cfg['src_key'] = self.src_key
         return cfg
 
@@ -223,7 +215,7 @@ class ModuleError(Exception):
         return "There is no %s module in inventory" % str(self)
 
 
-class Bridge(AgentObject):
+class Bridge(ConfigObject):
     pass
 
 
@@ -239,7 +231,7 @@ class Box(object):
         self.value = ''
 
 
-class Node(AgentObject):
+class Node(ConfigObject):
     """ Hardware unit managing Modules. """
     def __init__(self, cfg):
         super().__init__(cfg)
@@ -279,9 +271,9 @@ class Node(AgentObject):
     def get_cfg_modules(self) -> list:
         return [self.modules[mal].get_cfg() for mal in self.modules]
 
-    def get_cfg(self) -> dict:
+    def get_export(self) -> dict:
         cfg = super().get_cfg()
-        cfg['gpio'] = self.get_cfg_modules()     # inject gpio config
+        cfg['gpio'] = [self.modules[mal].get_export() for mal in self.modules]
         return cfg
 
     def get_pins_used(self) -> list:
@@ -402,7 +394,7 @@ class Actor(DBObject):
     def set_src_key(self) -> str:
         return self.src_key
 
-    def get_cfg(self) -> dict:
+    def get_export(self) -> dict:
         cfg = super().get_cfg()
         cfg['src_key'] = self.src_key
         cfg['id'] = self.id

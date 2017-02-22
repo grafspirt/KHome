@@ -39,10 +39,14 @@ def create_actor(cfg, aid=''):
 
 class ActorWithMapping(inv.Handler):
     """ Actor using mapping data in config. """
-    class MapUnit(inv.DBObject):
-        """ Object used as mapping record in ActorWithMapping configuration. """
+    class MapUnit(inv.ConfigObject):
+        """ Object used as a mapping record in ActorWithMapping configuration. """
         def __init__(self, cfg):
-            super().__init__(cfg, cfg['in'])
+            super().__init__(cfg)
+
+        @staticmethod
+        def extract_id(cfg: dict) -> str:
+            return cfg['in']
 
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)

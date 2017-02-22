@@ -117,8 +117,8 @@ def handle_node_data(nid: str, data):
                         inv.register_module(node, module_cfg)
                     log.info('Modules of Node %s have been uploaded to Inventory: %s' %
                              (str(node), str(["%s (%s)" % (
-                                 node.modules[m].get_cfg()['a'],
-                                 node.modules[m].get_cfg()['name']) for m in node.modules])))
+                                 node.modules[m].config['a'],
+                                 node.modules[m].config['name']) for m in node.modules])))
                 except KeyError:
                     pass
         # Ask all modules data
@@ -231,8 +231,8 @@ def request_manage_structure(request: dict) -> dict:
     return {
         'revision': inv.revision,
         'module-types': inv.KHOME_AGENT_INTERFACE['module_types'],
-        'nodes': [inv.nodes[node_id].get_cfg() for node_id in inv.nodes],
-        'actors': [inv.actors[act_id].get_cfg() for act_id in inv.actors]}
+        'nodes': [inv.nodes[nid].get_export() for nid in inv.nodes],
+        'actors': [inv.actors[aid].get_export() for aid in inv.actors]}
 
 
 def request_manage_timetable() -> dict:

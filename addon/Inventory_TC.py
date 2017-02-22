@@ -7,30 +7,32 @@ class InventoryTestCases(unittest.TestCase):
     def test01_addNode(self):
         prev_rev = inv.revision
         node = inv.register_node({"id": "I23456", "ver": "1", "inf": {"ip": "192.168.0.201", "rssi": "-77"}})
+        self.assertGreater(inv.revision, prev_rev)
         self.assertIsNotNone(node)
+        self.assertEquals(node.id, node.config['id'])
         self.assertEquals(node.id, "I23456")
         print('Node: %s' % node)
         self.assertEquals(inv.nodes['I23456'], node)
         self.assertEquals(node.config['inf']['ip'], "192.168.0.201")
-        self.assertGreater(inv.revision, prev_rev)
 
-    def test02_addModule(self):
-        prev_rev = inv.revision
+    def test02_addModuleIR(self):
         node = inv.nodes['I23456']
-        self.assert_('IR' not in node.modules)
+        self.assertNotIn('IR', node.modules)
+        prev_rev = inv.revision
         module = inv.register_module(node, {"t": "3", "a": "IR", "p": "2"})
+        self.assertGreater(inv.revision, prev_rev)
         self.assertIsNotNone(module)
+        self.assertEquals(module.id, module.config['a'])
+        self.assertEquals(module.id, 'IR')
         print('Module: %s' % module)
         self.assertEquals(module.src_key, inv.Module.form_src_key(node.id, module.id))
         self.assertEquals(node.modules['IR'], module)
-        self.assertEquals(module.config['p'], "2")
-        self.assertIn(module.box.name, inv.boxes['I23456/IR'])  # Boxes
-        self.assertGreater(inv.revision, prev_rev)
+        self.assertEquals(inv.boxes[inv.Module.form_src_key(node.id, module.id)][module.box.name], module.box)  # Box
 
     def test03_addModuleTemp(self):
         prev_rev = inv.revision
         node = inv.nodes['I23456']
-        self.assert_('TEMP' not in node.modules)
+        self.assertNotIn('TEMP', node.modules)
         module = inv.register_module(node, {"t": "1", "a": "TEMP", "p": "5"})
         self.assertIsNotNone(module)
         self.assertEquals(node.modules['TEMP'], module)
@@ -163,6 +165,39 @@ class InventoryTestCases(unittest.TestCase):
     def test21_processActorResend(self):
         inv.handle_value('I23456/IR', "20df8976")
         self.assertEquals(inv.nodes['J23456'].session.request, '3')
+
+    def test30_getManagerStructure(self):
+        from manager import request_manage_structure
+        data = request_manage_structure({"session": "123", "request": "get-structure"})
+        # Overall
+        self.assertIn('nodes', data)
+        self.assertIn('actors', data)
+        self.assertIn('module-types', data)
+        self.assertIn('revision', data)
+        # Nodes ---
+        node_cfg = data['nodes'][0]
+        nid = node_cfg['id']
+        self.assertIn('inf', node_cfg)
+        self.assertIn('gpio', node_cfg)
+        # Nodes - gpio
+        gpio_cfg = node_cfg['gpio'][0]
+        self.assertIn('p', gpio_cfg)
+        self.assertIn('t', gpio_cfg)
+        self.assertIn('a', gpio_cfg)
+        mal = gpio_cfg['a']
+        self.assertIn('name', gpio_cfg)
+        self.assertIn('src_key', gpio_cfg)
+        self.assertEquals(gpio_cfg['src_key'], inv.Module.form_src_key(nid, mal))
+        # Nodes - inf
+        inf_cfg = node_cfg['inf']
+        self.assertIn('ip', inf_cfg)
+        self.assertIn('rssi', inf_cfg)
+        # Actors ---
+        actor_cfg = data['actors'][0]
+        aid = actor_cfg['id']
+        self.assertIn('type', actor_cfg)
+        self.assertIn('data', actor_cfg)
+        self.assertIn('src_key', actor_cfg)
 
     def test98_wipeActor(self):
         actor = inv.actors['3']

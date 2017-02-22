@@ -7,7 +7,6 @@ from inventory import DatabaseError as StorageError
 import scheduler as sch
 from urllib.parse import urlencode
 import http.client as http_client
-import json
 
 
 # Factory
@@ -192,6 +191,27 @@ class LogDB(ActorLog):
                 pass
             finally:
                 inv.storage_close(cursor)
+
+
+class LogBus(ActorWithMapping, ActorLog):
+    """ Log source data to the bus (with mapping). """
+    def log(self, sig):
+        out = sig
+        try:
+            target = self.config['data']['trg']
+        except KeyError:
+            target = None
+        # Mapping
+        if self.mapping:
+            for map_id in self.mapping:   # type: ActorWithMapping.MapUnit
+                if str(map_id) == str(sig):
+                    map_unit = self.mapping[map_id]
+                    out = map_unit.config['out']
+                    if 'trg' in map_unit.config:
+                        target = map_unit.config['trg']
+        # Posting
+        if target:
+            inv.bus.send(target, out)
 
 
 class Average(inv.Handler):

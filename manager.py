@@ -57,9 +57,10 @@ def on_message_from_bus(topic, message):
     coordinates = topic.split('/')
     try:
         # Message -> Object or Str
-        message_object = json.loads(message)    # json-structured data
-        if not isinstance(message_object, dict):
-            message_object = message            # plain data
+        try:
+            message_object = json.loads(message)    # json-structured data
+        except (TypeError, ValueError):
+            message_object = message                # plain data
         # South - data from an Agent
         if coordinates[1] in ('nodes', 'data'):
             # Request response
@@ -88,10 +89,10 @@ def on_message_from_bus(topic, message):
         bus.send(
             "/error",
             "Wrong request format in topic [%s]: %s" % (topic, message))
-    except ValueError:
-        bus.send(
-            "/error",
-            "Request is not a JSON in topic [%s]: %s" % (topic, message))
+    # except ValueError:
+    #     bus.send(
+    #         "/error",
+    #         "Request is not a JSON in topic [%s]: %s" % (topic, message))
 
 
 # Handling South ---

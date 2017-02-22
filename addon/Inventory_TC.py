@@ -4,6 +4,15 @@ from actors import create_actor
 
 
 class InventoryTestCases(unittest.TestCase):
+    def test00_json(self):
+        import json
+        try:
+            tst1 = json.loads(1)
+            tst2 = json.loads('1')
+            tst3 = json.loads('off')
+        except ValueError as err:
+            print(err)
+
     def test01_addNode(self):
         prev_rev = inv.revision
         node = inv.register_node({"id": "I23456", "ver": "1", "inf": {"ip": "192.168.0.201", "rssi": "-77"}})

@@ -264,5 +264,6 @@ class Schedule(inv.Generator):
                 pass  # not valid config - do not load = do nothing
 
     def apply_changes(self):
+        super().apply_changes()
         sch.clear(self.id)
         self.schedule()

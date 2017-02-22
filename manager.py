@@ -332,8 +332,7 @@ def request_manage_modules(request: dict) -> dict:
             # sync up
             if is_agent_response_success(response):
                 for module_cfg in gpio_to_add:
-                    if inv.register_module(node, module_cfg, True):
-                        inv.changed()
+                    inv.register_module(node, module_cfg, True)
     elif request['request'] == 'del-module':
         # prepare
         gpio_current = node.get_cfg_modules()
@@ -346,8 +345,7 @@ def request_manage_modules(request: dict) -> dict:
             # sync up
             if is_agent_response_success(response):
                 for module_cfg in gpio_to_delete:
-                    if inv.wipe_module(node, module_cfg['a']):
-                        inv.changed()
+                    inv.wipe_module(node, module_cfg['a'])
     elif request['request'] == 'edit-module':
         # Check mandatory params
         try:
@@ -387,10 +385,10 @@ def request_manage_modules(request: dict) -> dict:
         response = node.send_config(inv.Node.get_gpio(gpio_result), request)
         # sync up
         if is_agent_response_success(response):
-            for mal in node.modules:
-                if mal in gpio_to_update:
-                    node.modules[mal].config = gpio_to_update[mal]
-            inv.changed()
+            for mal in gpio_to_update:
+                module = node.modules[mal]
+                module.config = gpio_to_update[mal]
+                module.apply_changes()
     # Initiate Actuators with the actual values (from boxes) after Modules updating
     if is_agent_response_success(response):
         for mal in node.modules:
@@ -437,11 +435,9 @@ def request_manage_actors(request: dict) -> dict:
             # Store sync
             if count:
                 actor.store_db()
-            # Apply changes in Actor
-            actor.apply_changes()
+                actor.apply_changes()
 
     # Answer
     if count:
-        inv.changed()
         response = {"ack": "1"}
     return response

@@ -205,6 +205,10 @@ class Module(ConfigObject):
             # there is no period value or it is incorrect
             pass
 
+    def apply_changes(self):
+        """ Method which is to be triggered after the Module is updated. """
+        changed()
+
 
 class ModuleError(Exception):
     def __init__(self, nid, mal):
@@ -444,8 +448,8 @@ class Actor(DBObject):
         pass
 
     def apply_changes(self):
-        """ Method which is to be triggered after the Actor has been updated. """
-        pass
+        """ Method which is to be triggered after the Actor is updated. """
+        changed()
 
 
 class Handler(Actor):
@@ -476,7 +480,7 @@ class Handler(Actor):
             self.src_key = SRCKEY_NOSRC
         return self.src_key
 
-    def get_handler_key(self):
+    def get_handler_key(self) -> str:
         return Module.form_src_key(
             self.config['data']['src'],
             self.config['data']['src_mdl'] if 'src_mdl' in self.config['data'] else '')
@@ -596,10 +600,11 @@ handlers = {}   # Actors processing data from a related Module/Actor
 boxes = {}      # Objects storing data of Modules/Actors
 
 
-def changed():
+def changed() -> int:
     """ Mark that some changes in inventory have been made. """
     global revision
     revision += 1
+    return revision
 
 
 def register_node(node_cfg):
@@ -664,11 +669,10 @@ def __register_box(box: Box):
         boxes[key][box.name] = box
 
 
-def __register_handler(handler):
+def __register_handler(handler: Actor):
     """
     Register the handler (Actor) which is to process signals from [Node]Module or other Actor in chain.
     :param handler: object of handler (Actor) to be registered
-    :return: nothing
     """
     if issubclass(handler.__class__, Handler):
         handler_key = handler.get_handler_key()
@@ -705,7 +709,7 @@ def wipe_actor(actor: Actor):
     changed()
 
 
-def __wipe_handler(handler):
+def __wipe_handler(handler: Actor):
     if issubclass(handler.__class__, Handler):
         handler_key = handler.get_handler_key()
         handlers[handler_key].remove(handler)
@@ -727,7 +731,7 @@ def __wipe_boxes_by_key(box_key: str):
     del boxes[box_key]
 
 
-def handle_value(key, value):
+def handle_value(key: str, value):
     if key in handlers:
         for actor in handlers[key]:
             # Actor is triggered if it is active

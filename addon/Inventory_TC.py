@@ -199,6 +199,22 @@ class InventoryTestCases(unittest.TestCase):
         self.assertIn('data', actor_cfg)
         self.assertIn('src_key', actor_cfg)
 
+    def test31_getManagerData(self):
+        from manager import request_manage_data
+        data = request_manage_data({"session": "456", "request": "get-data"})
+        self.assertIn('boxes', data)
+        self.assertIn('nodes-alive', data)
+        boxes_data = data['boxes']
+        alive_data = data['nodes-alive']
+        for nid in inv.nodes:
+            node = inv.nodes[nid]
+            self.assertIn(nid, alive_data)
+            self.assertIn('LTA', alive_data[nid])
+            self.assertIn('alive', alive_data[nid])
+            for mal in node.modules:
+                self.assertIn(inv.Module.form_src_key(nid, mal), boxes_data)
+                self.assertIn(inv.BOXNAME_MODULE, boxes_data[inv.Module.form_src_key(nid, mal)])
+
     def test98_wipeActor(self):
         actor = inv.actors['3']
         self.assertIn(actor.box.name, inv.boxes[actor.src_key])

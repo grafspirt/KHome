@@ -671,7 +671,7 @@ def __register_box(box: Box):
         boxes[key][box.name] = box
 
 
-def __register_handler(handler: Actor):
+def __register_handler(handler):
     """
     Register the handler (Actor) which is to process signals from [Node]Module or other Actor in chain.
     :param handler: object of handler (Actor) to be registered
@@ -711,7 +711,7 @@ def wipe_actor(actor: Actor):
     changed()
 
 
-def __wipe_handler(handler: Actor):
+def __wipe_handler(handler):
     if issubclass(handler.__class__, Handler):
         handler_key = handler.get_handler_key()
         handlers[handler_key].remove(handler)
@@ -736,9 +736,8 @@ def __wipe_boxes_by_key(box_key: str):
 def handle_value(key: str, value):
     if key in handlers:
         for actor in handlers[key]:
-            # Actor is triggered if it is active
+            # Process the value by the Handler found (if it is active)
             if actor.active:
                 actor.process_signal(value)
-            # try to process Actor Box by handlers(actors) referring to this Actor
-            if actor.box:
-                handle_value(actor.id, actor.box.value)
+                # Process the value/Actor Box value by Handlers referring to this Actor
+                handle_value(actor.id, actor.box.value if actor.box else value)

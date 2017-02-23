@@ -156,6 +156,12 @@ class Module(ConfigObject):
                     log.warning("Cannot load Module name for %s %s." % (str(self), str(err)))
                 finally:
                     storage_close(cursor)
+        # Init Module period
+        try:
+            self.period = float(self.config['prd'])
+        except (KeyError, ValueError):
+            # there is no period value or it is incorrect
+            self.period = 0
 
     def __str__(self):
         return "[%s]%s" % (self.nid, self.id)
@@ -188,22 +194,16 @@ class Module(ConfigObject):
             context_request)
 
     def handle_data(self, data):
-        self.periodical_alive_check()
+        if self.period:
+            Timer(self.period, self.periodical_alive_check).start()
         # Data processing
         self.box.value = data
         handle_value(self.src_key, data)
 
     def periodical_alive_check(self):
-        try:
-            period = float(self.config['prd'])
-            node = nodes[self.nid]
-            if time() - node.last_time_alive > period:
-                node.alive(False)
-            else:
-                Timer(period, self.periodical_alive_check).start()
-        except (KeyError, ValueError):
-            # there is no period value or it is incorrect
-            pass
+        node = nodes[self.nid]
+        if time() - node.last_time_alive > self.period + 1:     # 1 sec is an error
+            node.alive(False)
 
     def apply_changes(self):
         """ Method which is to be triggered after the Module is updated. """

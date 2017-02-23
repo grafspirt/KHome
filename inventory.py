@@ -194,6 +194,7 @@ class Module(ConfigObject):
             context_request)
 
     def handle_data(self, data):
+        # Start Periodical Alive Check timer if period is defined
         if self.period:
             Timer(self.period, self.periodical_alive_check).start()
         # Data processing

@@ -196,14 +196,14 @@ class Module(ConfigObject):
     def handle_data(self, data):
         # Start Periodical Alive Check timer if period is defined
         if self.period:
-            Timer(self.period, self.periodical_alive_check).start()
+            Timer(self.period + 1, self.periodical_alive_check).start()     # 1 sec is an error
         # Data processing
         self.box.value = data
         handle_value(self.src_key, data)
 
     def periodical_alive_check(self):
         node = nodes[self.nid]
-        if time() - node.last_time_alive > self.period + 1:     # 1 sec is an error
+        if time() - node.last_time_alive > self.period:
             node.alive(False)
 
     def apply_changes(self):

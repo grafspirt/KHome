@@ -17,7 +17,7 @@ KHOME_AGENT_INTERFACE = {
     'negative': "nack",
     'commands': ["get", "ping", "clean", "gpio", "brdg"],
     'get': ["gpio", "brdg", "data"],
-    'gpio': ["p", "t", "a", "prd"],
+    'gpio': ["p", "t", "a", "prd", "d"],
     'brdg': ["ond", "ols", "map"],
     'map': ["in", "out"],
     # Modules from the following list are allowed for processing

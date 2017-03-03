@@ -112,7 +112,7 @@ def handle_node_data(nid: str, data):
                     node = inv.nodes[nid]
                     for module_cfg in gpio_data['gpio']:
                         inv.register_module(node, module_cfg)
-                    log.info('Modules of Node %s have been uploaded to Inventory: %s' %
+                    log.info('Node %s has been initiated with Modules: %s' %
                              (str(node), str(["%s (%s)" % (
                                  node.modules[m].config['a'],
                                  node.modules[m].config['name']) for m in node.modules])))
@@ -427,7 +427,7 @@ def request_manage_actors(request: dict) -> dict:
             actor = inv.actors[aid]     # type: inv.Actor
             for item in data_from_request:
                 if item != 'id':
-                    actor.config['data'][item] = data_from_request[item]
+                    actor.config['data'][item] = data_from_request[item]    # TODO: there shall be merge, not set
                     count += 1
             # Store sync
             if count:

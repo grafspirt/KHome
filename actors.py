@@ -125,7 +125,7 @@ class ActorLog(inv.Handler):
 
 
 class Resend(ActorWithMapping):
-    """ Resending source data to another Module. """
+    """ Resending source data to another Agent. """
     def process_signal(self, signal):
         # Root values
         out = self.config['data']['out'] if 'out' in self.config['data'] else signal
@@ -143,9 +143,12 @@ class Resend(ActorWithMapping):
                     target = {"nid": map_unit_cfg['trg'], "mal": map_unit_cfg['trg_mdl']}
                 except KeyError:
                     pass
-        # Logging
+        # Sending
         if target:
-            inv.nodes[target['nid']].modules[target['mal']].send_signal(out)    # TODO: KeyError for 9c8165 on startup
+            try:
+                inv.nodes[target['nid']].modules[target['mal']].send_signal(out)
+            except KeyError:
+                pass    # there is no such Agent
 
 
 class LogThingSpeak(ActorWithMapping, ActorLog):

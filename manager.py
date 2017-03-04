@@ -401,14 +401,15 @@ def request_manage_actors(request: dict) -> dict:
     params_in = request['params']
     # Initiate
     response = {inv.KHOME_AGENT_INTERFACE['negative']: "Nothing to update"}
-    count = 0
+    # count = 0
+    updated = False
     # Do the job
     if request['request'] == 'add-actor':
         actor = create_actor(params_in)
         if actor:
             actor.store_db()
             inv.register_actor(actor)
-            count += 1
+            updated |= True
     elif request['request'] == 'del-actor':
         # Wipe from Inventory
         for aid in params_in['actors']:
@@ -417,24 +418,26 @@ def request_manage_actors(request: dict) -> dict:
                 inv.actors[aid].delete_db()
                 # Del from Inventory
                 inv.wipe_actor(inv.actors[aid])
-                count += 1
+                updated |= True
     elif request['request'] == 'edit-actor':
         # Mandatory params
         data_from_request = params_in['data']
         aid = data_from_request['id']
         # Update
-        if aid in inv.actors:
+        try:
             actor = inv.actors[aid]     # type: inv.Actor
+            # Merge current and requested parameters
             for item in data_from_request:
                 if item != 'id':
-                    actor.config['data'][item] = data_from_request[item]    # TODO: there shall be merge, not set
-                    count += 1
+                    actor.config['data'][item] = data_from_request[item]
+                    updated |= True
             # Store sync
-            if count:
+            if updated:
                 actor.store_db()
                 actor.apply_changes()
-
+        except KeyError:
+            pass
     # Answer
-    if count:
+    if updated:
         response = {"ack": "1"}
     return response

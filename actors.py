@@ -49,38 +49,43 @@ class ActorWithMapping(inv.Handler):
 
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)
+        # mapping data
         self.mapping = {}
-        # init mapping data
-        if 'map' in self.config['data']:
-            for map_cfg in self.config['data']['map']:
-                self.append_mapping(map_cfg)
-        else:
-            self.config['data']['map'] = []
+        self.init_mapping()
 
-    def append_mapping(self, cfg) -> MapUnit:
+    def append_mapping(self, map_cfg) -> MapUnit:
         """
         Create MapUnit basing on its config and add it to registry.
-        :param cfg: dict - config object of this mapping unit
+        :param map_cfg: dict - config object of this mapping unit
         :return: result object
         """
-        map_unit = ActorWithMapping.MapUnit(cfg)  # create
+        map_unit = ActorWithMapping.MapUnit(map_cfg)  # create
         self.mapping[map_unit.id] = map_unit  # add to the register
         return map_unit
 
-    def add_mapping(self, cfg) -> MapUnit:
-        """
-        Create/Add MapUnit to registry basing on its config and add it to config.
-        :param cfg: dict - config object of this mapping unit
-        :return: result object
-        """
-        map_unit = self.append_mapping(cfg)
-        self.config['data']['map'].append(cfg)
-        return map_unit
+    def init_mapping(self):
+        if 'map' in self.config['data']:
+            for map_cfg in self.config['data']['map']:
+                self.append_mapping(map_cfg)
 
-    def del_mapping(self, map_id):
-        if map_id in self.mapping:
-            self.config['data']['map'].remove(self.mapping[map_id].config)
-            del self.mapping[map_id]
+    def apply_changes(self):
+        self.mapping = {}
+        self.init_mapping()
+
+    # def add_mapping(self, cfg) -> MapUnit:
+    #     """
+    #     Create/Add MapUnit to registry basing on its config and add it to config.
+    #     :param cfg: dict - config object of this mapping unit
+    #     :return: result object
+    #     """
+    #     map_unit = self.append_mapping(cfg)
+    #     self.config['data']['map'].append(cfg)
+    #     return map_unit
+    #
+    # def del_mapping(self, map_id):
+    #     if map_id in self.mapping:
+    #         self.config['data']['map'].remove(self.mapping[map_id].config)
+    #         del self.mapping[map_id]
 
 
 class ActorLog(inv.Handler):
@@ -140,7 +145,7 @@ class Resend(ActorWithMapping):
                     pass
         # Logging
         if target:
-            inv.nodes[target['nid']].modules[target['mal']].send_signal(out)
+            inv.nodes[target['nid']].modules[target['mal']].send_signal(out)    # TODO: KeyError for 9c8165 on startup
 
 
 class LogThingSpeak(ActorWithMapping, ActorLog):

@@ -417,7 +417,7 @@ class Actor(DBObject):
                 else:
                     cursor.execute("INSERT INTO actors (config) VALUES (%s)", json.dumps(self.get_cfg()))
                     self.set_id(str(cursor.lastrowid))
-                    storage_save()
+                storage_save()
             except DatabaseError as err:
                 log.warning("Cannot store %s in Storage %s." % (str(self), str(err)))
             finally:

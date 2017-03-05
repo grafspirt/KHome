@@ -234,31 +234,6 @@ class Module(ConfigObject):
         changed()
 
 
-class ModuleError(Exception):
-    def __init__(self, nid, mal):
-        self.nid = nid
-        self.mal = mal
-
-    def __str__(self):
-        return "There is no %s module in inventory" % str(self)
-
-
-class Bridge(ConfigObject):
-    pass
-
-
-class Box(object):
-    """
-    An object storing value [value] of Modules and Actors [hoster].
-    It is registered in Manager Box register [add_box()] with a key = nid/mal.
-    All Actors processing values from some Module (having nid/mal) have the save key [get_source()].
-    """
-    def __init__(self, owner, name):
-        self.owner = owner
-        self.name = name
-        self.value = ''
-
-
 class Node(ConfigObject):
     """ Hardware unit managing Modules. """
     def __new__(cls, cfg):
@@ -344,12 +319,20 @@ class Node(ConfigObject):
             context_request)
 
 
-class NodeError(Exception):
-    def __init__(self, nid):
-        self.nid = nid
+class Bridge(ConfigObject):
+    pass
 
-    def __str__(self):
-        return "There is no %s node in inventory" % str(self)
+
+class Box(object):
+    """
+    An object storing value [value] of Modules and Actors [hoster].
+    It is registered in Manager Box register [add_box()] with a key = nid/mal.
+    All Actors processing values from some Module (having nid/mal) have the save key [get_source()].
+    """
+    def __init__(self, owner, name):
+        self.owner = owner
+        self.name = name
+        self.value = ''
 
 
 class NodeSession(object):
@@ -413,6 +396,23 @@ class NodeSession(object):
             log.warning('Timeout for the message: %s' % self.request)
             self.node.alive(False)
             self.stop(TIMEOUT_RESPONSE)
+
+
+class ModuleError(Exception):
+    def __init__(self, nid, mal):
+        self.nid = nid
+        self.mal = mal
+
+    def __str__(self):
+        return "There is no %s module in inventory" % str(self)
+
+
+class NodeError(Exception):
+    def __init__(self, nid):
+        self.nid = nid
+
+    def __str__(self):
+        return "There is no %s node in inventory" % str(self)
 
 
 # Actors

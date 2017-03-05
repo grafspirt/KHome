@@ -21,16 +21,18 @@ def create_actor(cfg, aid=''):
     try:
         # init config
         cfg_obj = inv.Actor.get_cfg_dict(cfg)
-        # prepare globals
-        globals_lower = {k.lower(): d for k, d in globals().items()}
-        # instantiate object
-        return globals_lower[cfg_obj['type'].lower()](
-            cfg_obj,
-            str(aid))
-    except KeyError:
-        log.warning('Actor is not loaded. Class is not found for: %s.' % cfg)
+        actor_type = cfg_obj['type'].lower()
+        try:
+            # prepare globals
+            globals_lower = {k.lower(): d for k, d in globals().items()}
+            # instantiate object
+            return globals_lower[actor_type](cfg_obj, str(aid))
+        except KeyError:
+            log.warning('Actor %s#%s could not be loaded - there is no appropriate class.' % (actor_type, aid))
     except ValueError:
-        log.warning('Actor is not loaded. Configuration is invalid: %s.' % cfg)
+        log.warning('Actor #%s could not be loaded - invalid configuration: %s.' % (aid, cfg))
+    except KeyError:
+        log.warning('Actor #%s could not be loaded - \'type\' is absent in: %s.' % (aid, cfg))
     return None
 
 
@@ -43,9 +45,14 @@ class ActorWithMapping(inv.Handler):
         def __init__(self, cfg):
             super().__init__(cfg)
 
-        @staticmethod
-        def extract_id(cfg: dict) -> str:
+        @classmethod
+        def extract_id(cls, cfg: dict) -> str:
             return cfg['in']
+
+        @classmethod
+        def check_cfg(cls, cfg):
+            super(ActorWithMapping.MapUnit, cls).check_cfg(cfg)
+            return cfg['out']
 
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)
@@ -53,39 +60,30 @@ class ActorWithMapping(inv.Handler):
         self.mapping = {}
         self.init_mapping()
 
-    def append_mapping(self, map_cfg) -> MapUnit:
+    def append_map_unit(self, map_cfg):
         """
         Create MapUnit basing on its config and add it to registry.
         :param map_cfg: dict - config object of this mapping unit
         :return: result object
         """
-        map_unit = ActorWithMapping.MapUnit(map_cfg)  # create
-        self.mapping[map_unit.id] = map_unit  # add to the register
-        return map_unit
+        try:
+            map_unit = ActorWithMapping.MapUnit(map_cfg)  # create
+            self.mapping[map_unit.id] = map_unit  # add to the register
+            return map_unit
+        except KeyError as err:
+            log.warning('MapUnit could not be loaded - %s is absent in: %s.' % (err, map_cfg))
+            return None
 
     def init_mapping(self):
+        """ Init dict with mapping units from the config. """
         if 'map' in self.config['data']:
             for map_cfg in self.config['data']['map']:
-                self.append_mapping(map_cfg)
+                self.append_map_unit(map_cfg)
 
     def apply_changes(self):
+        """ Re-init mapping structure when changes done. """
         self.mapping = {}
         self.init_mapping()
-
-    # def add_mapping(self, cfg) -> MapUnit:
-    #     """
-    #     Create/Add MapUnit to registry basing on its config and add it to config.
-    #     :param cfg: dict - config object of this mapping unit
-    #     :return: result object
-    #     """
-    #     map_unit = self.append_mapping(cfg)
-    #     self.config['data']['map'].append(cfg)
-    #     return map_unit
-    #
-    # def del_mapping(self, map_id):
-    #     if map_id in self.mapping:
-    #         self.config['data']['map'].remove(self.mapping[map_id].config)
-    #         del self.mapping[map_id]
 
 
 class ActorLog(inv.Handler):
@@ -134,7 +132,7 @@ class Resend(ActorWithMapping):
         except KeyError:
             target = None
         # Mapping values
-        for map_id in self.mapping:     # type: ActorWithMapping.MapUnit
+        for map_id in self.mapping:
             if str(map_id) == str(signal):
                 map_unit_cfg = self.mapping[map_id].config
                 if 'out' in map_unit_cfg:
@@ -153,14 +151,10 @@ class Resend(ActorWithMapping):
 
 class LogThingSpeak(ActorWithMapping, ActorLog):
     """ Log source data to ThingSpeak.com using mapping for complex signal. """
-    def __new__(cls, cfg, db_id):
-        if 'key' in cfg['data']:
-            return super().__new__(cls, cfg, db_id)
-        else:
-            log.warning(
-                'Actor %s#%s could not be loaded: no "key" in config.' %
-                (cfg['type'].lower(), db_id))
-            return None
+    @classmethod
+    def check_cfg(cls, cfg):
+        super(LogThingSpeak, cls).check_cfg(cfg)
+        return cfg['data']['key']
 
     def log(self, signal):
         # Prepare
@@ -233,14 +227,10 @@ class LogBus(ActorWithMapping, ActorLog):
 
 class Average(inv.Handler):
     """ Averages values on some period, defined by 'depth' parameter. """
-    def __new__(cls, cfg, db_id):
-        # Box is mandatory for Average actors
-        if 'box' in cfg['data']:
-            return super().__new__(cls, cfg, db_id)
-        else:
-            log.warning('Actor %s#%s could not be loaded: no "box" in config.' %
-                        (cfg['type'], db_id))
-            return None
+    @classmethod
+    def check_cfg(cls, cfg):
+        super(Average, cls).check_cfg(cfg)
+        return cfg['data']['box']
 
     def __init__(self, cfg, db_id):
         super().__init__(cfg, db_id)

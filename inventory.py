@@ -64,6 +64,10 @@ class BaseObject(object):
     Prototype of all objects in the structure.
     It has Id and Configuration.
     """
+    def __new__(cls, cfg):
+        cls.check_cfg(cfg)
+        return super().__new__(cls)
+
     def __init__(self, cfg):
         super().__init__()
         self.config = self.get_cfg_dict(cfg)
@@ -95,6 +99,10 @@ class BaseObject(object):
         else:
             return cfg
 
+    @classmethod
+    def check_cfg(cls, cfg):
+        return ''
+
 
 class ConfigObject(BaseObject):
     """ Prototype of an object stored (incl. id) in Configuration. """
@@ -103,8 +111,8 @@ class ConfigObject(BaseObject):
         # config of these object types contains ID, it should be taken from there
         self.set_id(self.extract_id(self.config))
 
-    @staticmethod
-    def extract_id(cfg: dict) -> str:
+    @classmethod
+    def extract_id(cls, cfg: dict) -> str:
         """
         Extract ID from object internal configuration (KObject.get_cfg_dict).
         :param cfg: dict - object internal configuration
@@ -112,9 +120,17 @@ class ConfigObject(BaseObject):
         """
         return cfg['id']
 
+    @classmethod
+    def check_cfg(cls, cfg):
+        super(ConfigObject, cls).check_cfg(cfg)
+        cls.extract_id(cfg)
+
 
 class DBObject(BaseObject):
     """ Prototype of an object stored in DB. """
+    def __new__(cls, cfg, oid):
+        return super().__new__(cls, cfg)
+
     def __init__(self, cfg, oid: str):
         super().__init__(cfg)
         self.set_id(oid)  # ID is stored in DB entity, it should be replicated to config
@@ -134,6 +150,13 @@ class DBObject(BaseObject):
 # Agents - Nodes, Modules and attendant entities
 
 class Module(ConfigObject):
+    def __new__(cls, cfg, nid):
+        try:
+            return super().__new__(cls, cfg)
+        except KeyError as err:
+            log.warning('Module could not be loaded - %s is absent in: %s.' % (err, cfg))
+            return None
+
     def __init__(self, cfg, nid):
         """
         :param cfg: Config string/object describing the Module
@@ -171,8 +194,8 @@ class Module(ConfigObject):
         cfg['src_key'] = self.src_key
         return cfg
 
-    @staticmethod
-    def extract_id(cfg) -> str:
+    @classmethod
+    def extract_id(cls, cfg) -> str:
         return cfg['a']
 
     @staticmethod
@@ -238,6 +261,13 @@ class Box(object):
 
 class Node(ConfigObject):
     """ Hardware unit managing Modules. """
+    def __new__(cls, cfg):
+        try:
+            return super().__new__(cls, cfg)
+        except KeyError as err:
+            log.warning('Node could not be loaded - %s is absent in: %s.' % (err, cfg))
+            return None
+
     def __init__(self, cfg):
         super().__init__(cfg)
         self.type = 'esp8266'                       # Node hardware type
@@ -259,7 +289,7 @@ class Node(ConfigObject):
 
     def add_module(self, module_cfg: dict):
         new_module = Module(module_cfg, self.id)
-        if new_module.id not in self.modules:
+        if new_module and new_module.id not in self.modules:
             # Module does not exist in internal Inventory so add it and return result object
             self.modules[new_module.id] = new_module
             return new_module
@@ -389,14 +419,26 @@ class NodeSession(object):
 
 class Actor(DBObject):
     """ Units processing data came from Agents. """
-    def __init__(self, cfg, db_id: str):
-        super().__init__(cfg, db_id)
+    def __new__(cls, cfg, aid):
+        try:
+            return super().__new__(cls, cfg, aid)
+        except KeyError as err:
+            log.warning('Actor %s#%s could not be loaded - %s is absent.' % (cls.__name__, aid, err))
+            return None
+
+    def __init__(self, cfg, aid: str):
+        super().__init__(cfg, aid)
         self.active = bool(self.config['active']) if 'active' in self.config else True
         self.box = Box(self, self.config['data']['box']) if 'box' in self.config['data'] else None
         self.src_key = ''
 
     def __str__(self):
         return "%s#%s" % (self.config['type'].capitalize(), self.id)
+
+    @classmethod
+    def check_cfg(cls, cfg):
+        super(Actor, cls).check_cfg(cfg)
+        return cfg['data']
 
     def set_src_key(self) -> str:
         return self.src_key
@@ -459,15 +501,10 @@ class Handler(Actor):
     """
     Actor data source is a Module or another Actor.
     """
-    def __new__(cls, cfg, db_id):
-        # Source (src) is mandatory for all actors except Schedule
-        if 'src' in cfg['data']:
-            return super().__new__(cls)
-        else:
-            log.warning(
-                'Actor %s#%s could not be loaded: no "src" in config.' %
-                (cfg['type'].lower(), db_id))
-            return None
+    @classmethod
+    def check_cfg(cls, cfg):
+        super(Handler, cls).check_cfg(cfg)
+        return cfg['data']['src']
 
     def set_src_key(self) -> str:
         """ Get Key of data source (Module) starting a chain of Actors. """
@@ -620,7 +657,7 @@ def register_node(node_cfg):
     # Parse config as a temp Node
     new_node = Node(node_cfg)
     # Store the new one
-    if new_node.id not in nodes:
+    if new_node and new_node.id not in nodes:
         nodes[new_node.id] = new_node
         changed()
         return new_node

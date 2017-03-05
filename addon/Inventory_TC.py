@@ -52,10 +52,31 @@ class InventoryTestCases(unittest.TestCase):
         self.assertIn(module.box.name, inv.boxes['J23456/SW'])
         self.assertGreater(inv.revision, prev_rev)
 
+    def test05_tryNodeWOId(self):
+        node = inv.register_node({"idddd": "I23456", "ver": "1", "inf": {"ip": "192.168.0.201", "rssi": "-77"}})
+        self.assertIsNone(node)
+
+    def test06_tryModuleWOAlias(self):
+        node = inv.nodes['I23456']
+        module = inv.register_module(node, {"t": "3", "aaa": "IR", "p": "2"})
+        self.assertIsNone(module)
+
+    def test07_tryActorWOType(self):
+        actor = create_actor(
+            {"typeeeeeee": "logthingspeak", "data": {"src":"I23456", "src_mdl": "TEMP"}},
+            '51')
+        self.assertIsNone(actor)
+
+    def test08_tryActorWOData(self):
+        actor = create_actor(
+            {"type": "logthingspeak", "dataaaaa": {"src_mdl": "TEMP"}},
+            '52')
+        self.assertIsNone(actor)
+
     def test09_tryActorHandlerWOSrc(self):
         actor = create_actor(
-            {"type": "logdb", "data": {"src_mdl": "TEMP"}},
-            '5555')
+            {"type": "logthingspeak", "data": {"src_mdl": "TEMP"}},
+            '53')
         self.assertIsNone(actor)
 
     def test10_tryActorNone(self):
@@ -67,10 +88,13 @@ class InventoryTestCases(unittest.TestCase):
     def test11_addActorResend(self):
         actor = create_actor(
             {"type": "resend", "data": {"src": "I23456", "src_mdl": "IR", "map": [
-                {"trg": "J23456", "trg_mdl": "SW", "in": "20df8976", "out": "3"}
+                {"trg": "J23456", "trg_mdl": "SW", "in": "20df8976", "out": "3"},
+                {"trg": "J23456", "trg_mdl": "SW", "in": "XXX", "outttt": "3"}
             ]}},
             '1')
         self.assertIsNotNone(actor)
+        self.assertIn('20df8976', actor.mapping)
+        self.assertNotIn('XXX', actor.mapping)
         print('Actor: %s' % actor)
         prev_rev = inv.revision
         self.assertEquals(inv.register_actor(actor), actor)

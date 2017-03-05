@@ -119,7 +119,8 @@ def handle_node_data(nid: str, data):
                 except KeyError:
                     pass
         # Ask all modules data
-        inv.nodes[nid].send_config({"get": "data"})
+        if nid in inv.nodes:
+            inv.nodes[nid].send_config({"get": "data"})
 
 
 def handle_module_data(nid: str, mal: str, data):
